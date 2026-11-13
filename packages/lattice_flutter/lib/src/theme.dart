@@ -194,8 +194,8 @@ class LatticeGridTheme {
     if (decoration.tone == CellTone.neutral || decoration.intensity <= 0) {
       return null;
     }
-    return toneColor(decoration.tone)
-        .withValues(alpha: 0.05 + 0.22 * decoration.intensity);
+    final color = toneColor(decoration.tone);
+    return color.withValues(alpha: 0.05 + 0.22 * decoration.intensity);
   }
 
   /// Background for a data row, before selection and hover are applied.
