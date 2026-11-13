@@ -56,7 +56,9 @@ narrow and worth stating:
   It is pure computation, which keeps auditing it tractable. `lattice_flutter`
   depends only on Flutter and the engine.
 - Dependency updates arrive as Dependabot pull requests, and every pull request
-  runs an OSV scan of the dependency graph as well as a dependency review.
+  runs an OSV scan of the resolved dependency versions. GitHub's dependency
+  review needs the repository's dependency graph enabled in settings; OSV
+  covers the same ground without it.
 - Publishing to pub.dev goes through GitHub OIDC, so no long-lived publishing
   token exists in this repository or on a maintainer's machine.
 - Workflows are pinned to major versions of first-party actions and run with
