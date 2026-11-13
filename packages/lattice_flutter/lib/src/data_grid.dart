@@ -121,6 +121,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
   late final ScrollController _vLeading;
   late final ScrollController _vScrolling;
   late final ScrollController _vTrailing;
+  late final ScrollController _vCheckbox;
   late final ScrollController _hHeader;
   late final ScrollController _hFilter;
   late final ScrollController _hBody;
@@ -147,6 +148,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     _vLeading = _vertical.addAndGet();
     _vScrolling = _vertical.addAndGet();
     _vTrailing = _vertical.addAndGet();
+    _vCheckbox = _vertical.addAndGet();
     _horizontal = SyncedScrollGroup();
     _hHeader = _horizontal.addAndGet();
     _hFilter = _horizontal.addAndGet();
@@ -389,11 +391,16 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     required Widget Function(List<ColumnLayout<T>> columns, bool isFirstPane)
     scrollingBuilder,
     required ScrollController horizontal,
+    Widget? checkboxPane,
   }) {
     final hasLeading = layout.leading.isNotEmpty;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // Never scrolls horizontally: a checkbox the user has to scroll to
+        // find is worse than no checkbox.
+        if (checkboxPane != null)
+          SizedBox(width: theme.checkboxColumnWidth, child: checkboxPane),
         if (hasLeading)
           _FrozenPane(
             width: layout.leadingWidth,
@@ -459,6 +466,9 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
         horizontal: _stackedController(index),
         paneBuilder: cells,
         scrollingBuilder: cells,
+        checkboxPane: widget.showCheckboxColumn
+            ? const SizedBox.shrink()
+            : null,
       ),
     );
   }
@@ -493,6 +503,9 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
         horizontal: _hHeader,
         paneBuilder: cells,
         scrollingBuilder: cells,
+        checkboxPane: widget.showCheckboxColumn
+            ? _SelectAllCheckbox<T>(controller: _controller, theme: theme)
+            : null,
       ),
     );
   }
@@ -537,6 +550,9 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
         horizontal: _hFilter,
         paneBuilder: cells,
         scrollingBuilder: cells,
+        checkboxPane: widget.showCheckboxColumn
+            ? const SizedBox.shrink()
+            : null,
       ),
     );
   }
@@ -600,6 +616,22 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
               isFirstPane: isFirstPane,
               theme: theme,
             ),
+            checkboxPane: widget.showCheckboxColumn
+                ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (var i = 0; i < rows.length; i++)
+                        _RowCheckbox<T>(
+                          controller: _controller,
+                          index: offset + i,
+                          height:
+                              widget.rowHeightBuilder?.call(rows[i]) ??
+                              _rowHeight,
+                          theme: theme,
+                        ),
+                    ],
+                  )
+                : null,
           ),
         ),
       );
@@ -640,6 +672,13 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
           indexOffset: frozenTop,
           count: scrollingCount,
         ),
+        checkboxPane: widget.showCheckboxColumn
+            ? _buildCheckboxColumn(
+                theme: theme,
+                indexOffset: frozenTop,
+                count: scrollingCount,
+              )
+            : null,
       ),
     );
 
@@ -773,6 +812,36 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
           columns: columns,
           isFirstPane: isFirstPane,
           theme: theme,
+        );
+      },
+    );
+  }
+
+  /// The checkbox column beside the scrolling rows.
+  ///
+  /// Its own list, joined to the vertical scroll group, so it stays aligned
+  /// with the rows without the row widgets having to know about it.
+  Widget _buildCheckboxColumn({
+    required LatticeGridTheme theme,
+    required int indexOffset,
+    required int count,
+  }) {
+    return ListView.builder(
+      controller: _vCheckbox,
+      physics: const ClampingScrollPhysics(),
+      itemExtent: widget.rowHeightBuilder == null ? _rowHeight : null,
+      itemCount: count,
+      itemBuilder: (context, index) {
+        final rowIndex = index + indexOffset;
+        final row = _controller.rowAt(rowIndex);
+        if (row == null) return const SizedBox.shrink();
+        return _RowCheckbox<T>(
+          controller: _controller,
+          index: rowIndex,
+          height: widget.rowHeightBuilder?.call(row) ?? _rowHeight,
+          theme: theme,
+          // A group header is not a data row; it selects its whole group.
+          isGroup: row is GroupGridRow<T>,
         );
       },
     );
@@ -944,6 +1013,86 @@ class _FrozenPane extends StatelessWidget {
               : Border(left: line),
         ),
         child: child,
+      ),
+    );
+  }
+}
+
+/// The tri-state select-all checkbox in the header.
+class _SelectAllCheckbox<T> extends StatelessWidget {
+  const _SelectAllCheckbox({required this.controller, required this.theme});
+
+  final GridController<T> controller;
+  final LatticeGridTheme theme;
+
+  @override
+  Widget build(BuildContext context) {
+    final coverage = controller.selectionCoverage;
+    return Center(
+      child: Tooltip(
+        message: switch (coverage) {
+          SelectionCoverage.all => 'Clear the selection',
+          SelectionCoverage.some => 'Select every row',
+          SelectionCoverage.none => 'Select every row',
+        },
+        child: Checkbox(
+          // Null is the dash: a partial selection must not look complete.
+          value: switch (coverage) {
+            SelectionCoverage.all => true,
+            SelectionCoverage.some => null,
+            SelectionCoverage.none => false,
+          },
+          tristate: true,
+          onChanged: (_) => controller.toggleSelectAll(),
+        ),
+      ),
+    );
+  }
+}
+
+/// One row's checkbox.
+class _RowCheckbox<T> extends StatelessWidget {
+  const _RowCheckbox({
+    required this.controller,
+    required this.index,
+    required this.height,
+    required this.theme,
+    this.isGroup = false,
+  });
+
+  final GridController<T> controller;
+  final int index;
+  final double height;
+  final LatticeGridTheme theme;
+  final bool isGroup;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = controller.selection.isRowSelected(index);
+    return SizedBox(
+      height: height,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: selected ? theme.selectedRowBackground : null,
+          border: theme.showHorizontalGridLines
+              ? Border(
+                  bottom: BorderSide(
+                    color: theme.gridLine,
+                    width: theme.gridLineWidth,
+                  ),
+                )
+              : null,
+        ),
+        child: Center(
+          child: Transform.scale(
+            scale: 0.85,
+            child: Checkbox(
+              value: selected,
+              onChanged: (value) =>
+                  controller.setRowSelected(index, value ?? false),
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -110,6 +110,12 @@ class CellRange {
       'CellRange($firstRow..$lastRow x ${coveredFields.join(',')})';
 }
 
+/// How much of the grid is selected, for a select-all control.
+///
+/// A checkbox needs three states, not two: "some" is what stops the header
+/// checkbox lying about a partial selection.
+enum SelectionCoverage { none, some, all }
+
 /// Holds and mutates the current selection.
 class SelectionState {
   SelectionState({this.mode = SelectionMode.multiRow});
@@ -210,6 +216,19 @@ class SelectionState {
     }
     _activeCell = cell;
     _range = CellRange(anchor: _anchor!, focus: cell, fields: fields);
+  }
+
+  /// How much of [rowCount] rows is selected.
+  SelectionCoverage coverageOf(int rowCount) {
+    if (rowCount == 0 || _rows.isEmpty) return SelectionCoverage.none;
+    // Count only rows that still exist: a stale index must not make a
+    // partial selection look complete.
+    var inRange = 0;
+    for (final index in _rows) {
+      if (index >= 0 && index < rowCount) inRange++;
+    }
+    if (inRange == 0) return SelectionCoverage.none;
+    return inRange >= rowCount ? SelectionCoverage.all : SelectionCoverage.some;
   }
 
   void selectAll(int rowCount) {
