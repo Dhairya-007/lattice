@@ -1,6 +1,7 @@
 name: lattice_core
 description: Framework-agnostic data grid engine - sorting, filtering, grouping, aggregation, virtualization, selection and editing in pure Dart.
-version: 0.1.0
+version: 0.1.1
+homepage: https://github.com/Dhairya-007/lattice
 repository: https://github.com/Dhairya-007/lattice
 issue_tracker: https://github.com/Dhairya-007/lattice/issues
 

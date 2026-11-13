@@ -43,6 +43,19 @@ jobs:
       - name: Test
         run: dart test --reporter expanded
 
+      # pub.dev publishes these docs and scores the package on them, so a
+      # broken reference in a doc comment is a real defect, not a nit.
+      - name: Build API documentation
+        run: |
+          dart doc --output "$RUNNER_TEMP/api" 2>&1 | tee "$RUNNER_TEMP/doc.log"
+          if grep -qiE "^ *(warning|error):" "$RUNNER_TEMP/doc.log"; then
+            echo 'dart doc reported problems; see above.'
+            exit 1
+          fi
+
+      - name: Check the package is publishable
+        run: dart pub publish --dry-run
+
   flutter:
     name: lattice_flutter (widgets)
     runs-on: ubuntu-latest
