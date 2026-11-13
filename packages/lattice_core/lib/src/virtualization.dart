@@ -93,7 +93,7 @@ class RowMetrics {
     if (index < 0 || index >= rowCount) return 0;
     return isUniform
         ? _rowHeight
-        : _offsets![index + 1] - _offsets![index];
+        : _offsets![index + 1] - _offsets[index];
   }
 
   /// The row containing [offset], clamped to the valid range.
@@ -104,11 +104,12 @@ class RowMetrics {
     if (isUniform) {
       return (offset / _rowHeight).floor().clamp(0, rowCount - 1);
     }
+    final offsets = _offsets!;
     var low = 0;
     var high = rowCount - 1;
     while (low < high) {
       final mid = (low + high) >> 1;
-      if (_offsets![mid + 1] <= offset) {
+      if (offsets[mid + 1] <= offset) {
         low = mid + 1;
       } else {
         high = mid;

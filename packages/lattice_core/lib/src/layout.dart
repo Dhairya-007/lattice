@@ -126,7 +126,7 @@ GridLayout<T> computeLayout<T>(
     return c.clampWidth(override ?? c.width);
   }
 
-  var widths = {for (final c in visible) c.field: widthOf(c)};
+  final widths = {for (final c in visible) c.field: widthOf(c)};
 
   final natural = widths.values.fold<double>(0, (a, b) => a + b);
   if (fit != ColumnFit.none && viewportWidth > natural && visible.isNotEmpty) {

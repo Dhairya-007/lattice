@@ -168,7 +168,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     }
 
     return GridResult<T>(
-      rows: working is List<T> ? List<T>.of(working) : working.toList(),
+      rows: List<T>.of(working),
       totalCount: total,
       filteredCount: matched,
       aggregates: aggregates,
