@@ -376,6 +376,9 @@ class _Masthead extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // Hoisted: a long Theme.of(...).textTheme.x?.copyWith(...) chain is
+    // formatted differently by different Dart versions.
+    final text = Theme.of(context).textTheme;
     final peak = controller.aggregates['latencyMs.max'];
     final average = controller.aggregates['latencyMs.average'];
 
@@ -415,7 +418,7 @@ class _Masthead extends StatelessWidget {
               const SizedBox(width: 10),
               Text(
                 'Lattice',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                style: text.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                   letterSpacing: -0.2,
                 ),
@@ -423,8 +426,7 @@ class _Masthead extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 'service log console',
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: scheme.onSurfaceVariant),
+                style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
               const Spacer(),
               _Stat(
