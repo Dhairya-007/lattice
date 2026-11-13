@@ -292,9 +292,8 @@ void main() {
 
       final cell = find.text('Keyboard');
       await tester.tap(cell);
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 40));
       await tester.tap(cell);
-      await tester.pump(const Duration(milliseconds: 50));
       await tester.pumpAndSettle();
 
       expect(find.byType(TextField), findsOneWidget);
@@ -337,6 +336,20 @@ void main() {
       expect(find.text('Keyboard'), findsOneWidget);
     });
 
+    testWidgets('two slow taps on one cell do not start an edit', (tester) async {
+      final controller = makeController();
+      await tester.pumpWidget(
+        host(LatticeDataGrid<Product>(controller: controller)),
+      );
+      final cell = find.text('Keyboard');
+      await tester.tap(cell);
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.tap(cell);
+      await tester.pumpAndSettle();
+      expect(find.byType(TextField), findsNothing);
+      expect(controller.selection.selectedRows, [0]);
+    });
+
     testWidgets('a number cell coerces its text to a num', (tester) async {
       final controller = makeController();
       await tester.pumpWidget(
@@ -360,7 +373,7 @@ void main() {
       );
       final cell = find.text('Input').first;
       await tester.tap(cell);
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 40));
       await tester.tap(cell);
       await tester.pumpAndSettle();
       expect(find.byType(TextField), findsNothing);
@@ -378,7 +391,7 @@ void main() {
       );
       final cell = find.text('Keyboard');
       await tester.tap(cell);
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 40));
       await tester.tap(cell);
       await tester.pumpAndSettle();
       expect(find.byType(TextField), findsNothing);
@@ -514,6 +527,20 @@ void main() {
       await tester.tap(find.byIcon(Icons.last_page));
       await tester.pumpAndSettle();
       expect(find.text('Page 3 of 3'), findsOneWidget);
+    });
+
+    testWidgets('a page size outside the offered list still renders',
+        (tester) async {
+      await tester.pumpWidget(
+        host(
+          LatticeDataGrid<Product>(
+            controller: makeController(pageSize: 2),
+            pageSizes: const [25, 50],
+          ),
+        ),
+      );
+      expect(tester.takeException(), isNull);
+      expect(find.text('Page 1 of 3'), findsOneWidget);
     });
 
     testWidgets('no footer when showFooter is false', (tester) async {

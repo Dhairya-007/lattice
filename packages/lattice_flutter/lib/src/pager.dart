@@ -18,6 +18,13 @@ class LatticeGridFooter<T> extends StatelessWidget {
   /// Page sizes offered in the footer menu.
   final List<int> pageSizes;
 
+  /// [pageSizes], plus the current page size when it is not already there.
+  List<int> get _offeredSizes {
+    final current = controller.pageSize;
+    final sizes = {...pageSizes, if (current != null && current > 0) current};
+    return sizes.toList()..sort();
+  }
+
   String get _countLabel {
     final matched = controller.matchedCount;
     final total = controller.totalCount;
@@ -82,8 +89,11 @@ class LatticeGridFooter<T> extends StatelessWidget {
               isDense: true,
               underline: const SizedBox.shrink(),
               style: theme.footerTextStyle,
+              // DropdownButton asserts its value is among its items, so a
+              // page size the caller set but did not offer has to be folded
+              // in rather than crashing the footer.
               items: [
-                for (final size in pageSizes)
+                for (final size in _offeredSizes)
                   DropdownMenuItem<int>(
                     value: size,
                     child: Text('$size / page'),

@@ -108,6 +108,8 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
   final FocusNode _focus = FocusNode(debugLabel: 'LatticeDataGrid');
 
   int? _hoveredRow;
+  CellAddress? _lastTapCell;
+  DateTime? _lastTapAt;
 
   @override
   void initState() {
@@ -280,6 +282,24 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
       final row = _controller.rowAt(cell.row);
       if (row is DataGridRow<T>) widget.onRowTap?.call(row);
     }
+  }
+
+  /// Recognises a double tap without a [GestureDetector.onDoubleTap].
+  ///
+  /// A detector carrying both onTap and onDoubleTap cannot report the single
+  /// tap until the double-tap window closes, so every click would select a
+  /// row a third of a second late. Tracking the previous tap here keeps
+  /// selection immediate - which is also how a spreadsheet behaves - and
+  /// leaves no pending timer behind.
+  bool _isDoubleTap(CellAddress cell) {
+    final now = DateTime.now();
+    final previous = _lastTapAt;
+    final isRepeat = _lastTapCell == cell &&
+        previous != null &&
+        now.difference(previous) <= kDoubleTapTimeout;
+    _lastTapCell = cell;
+    _lastTapAt = now;
+    return isRepeat;
   }
 
   void _handleCellDoubleTap(CellAddress cell) {
@@ -597,8 +617,11 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     final address = CellAddress(index, laid.column.field);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => _handleCellTap(address),
-      onDoubleTap: () => _handleCellDoubleTap(address),
+      // Tap-down rather than tap: see _isDoubleTap.
+      onTapDown: (_) {
+        _handleCellTap(address);
+        if (_isDoubleTap(address)) _handleCellDoubleTap(address);
+      },
       child: LatticeCell<T>(
         controller: _controller,
         column: laid.column,
