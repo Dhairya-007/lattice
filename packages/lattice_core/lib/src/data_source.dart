@@ -274,9 +274,8 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     final cached = _stats[field];
     if (cached != null) return cached;
     final column = columns[field];
-    final rows = _matchedRows.isEmpty && _matchedKey.isEmpty
-        ? _rows
-        : _matchedRows;
+    final rows =
+        _matchedRows.isEmpty && _matchedKey.isEmpty ? _rows : _matchedRows;
     final stats = column == null
         ? ColumnStats.empty
         : computeColumnStats(rows.map(column.value));

@@ -25,6 +25,9 @@ class LatticeCell<T> extends StatelessWidget {
     required this.theme,
     this.cellBuilder,
     this.isLastInPane = false,
+    this.decoration = CellDecoration.none,
+    this.highlightChanges = false,
+    this.rowId,
     super.key,
   });
 
@@ -39,6 +42,16 @@ class LatticeCell<T> extends StatelessWidget {
   /// Suppresses the trailing grid line at the edge of a pane, where the pane
   /// divider already draws one.
   final bool isLastInPane;
+
+  /// Conditional formatting for this cell, from the column's [CellRule].
+  final CellDecoration decoration;
+
+  /// Whether to flash when this cell's value changes under a live feed.
+  final bool highlightChanges;
+
+  /// Identity of the row, so a flash can tell an updated value from a row
+  /// that merely moved into this position.
+  final Object? rowId;
 
   static Alignment _alignmentFor(ColumnAlign align) {
     switch (align) {
@@ -68,6 +81,8 @@ class LatticeCell<T> extends StatelessWidget {
     final isActive = controller.selection.activeCell == address;
     final isSelected = controller.selection.isCellSelected(address);
 
+    final text = column.formattedValue(row);
+
     Widget content;
     if (isEditing) {
       content = _CellEditor<T>(
@@ -79,19 +94,39 @@ class LatticeCell<T> extends StatelessWidget {
       content = cellBuilder!(context, column, row);
     } else {
       content = Text(
-        column.formattedValue(row),
-        style: theme.cellTextStyle,
+        text,
+        style: decoration.isEmpty
+            ? theme.cellTextStyle
+            : theme.cellTextStyle.copyWith(
+                color: decoration.tone == CellTone.neutral
+                    ? null
+                    : theme.toneColor(decoration.tone),
+                fontWeight: decoration.bold ? FontWeight.w600 : null,
+              ),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         textAlign: _textAlignFor(column.effectiveAlign),
       );
     }
 
+    if (highlightChanges && rowId != null && !isEditing) {
+      content = _ChangeFlash(
+        rowId: rowId!,
+        value: text,
+        color: theme.changeFlashColor,
+        duration: theme.changeFlashDuration,
+        child: content,
+      );
+    }
+
+    final tint = isEditing ? null : theme.backgroundFor(decoration);
+    final bar = isEditing ? null : decoration.bar;
+
     return SizedBox(
       width: width,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: isSelected && !isEditing ? theme.selectedCellBackground : null,
+          color: isSelected && !isEditing ? theme.selectedCellBackground : tint,
           border: Border(
             right: theme.showVerticalGridLines && !isLastInPane
                 ? BorderSide(color: theme.gridLine, width: theme.gridLineWidth)
@@ -106,7 +141,36 @@ class LatticeCell<T> extends StatelessWidget {
               : null,
           padding: theme.cellPadding,
           alignment: _alignmentFor(column.effectiveAlign),
-          child: content,
+          // The bar sits behind the text rather than beside it, so adding
+          // one never costs the value any room.
+          child: bar == null
+              ? content
+              : Stack(
+                  fit: StackFit.passthrough,
+                  children: [
+                    Positioned.fill(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: bar,
+                          heightFactor: 0.62,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: theme
+                                  .toneColor(decoration.tone)
+                                  .withValues(alpha: theme.dataBarOpacity),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Align(
+                      alignment: _alignmentFor(column.effectiveAlign),
+                      child: content,
+                    ),
+                  ],
+                ),
         ),
       ),
     );
@@ -232,6 +296,79 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
           onSubmitted: (_) => _commit(),
         ),
       ),
+    );
+  }
+}
+
+/// Briefly tints its child when the value changes under the same row.
+///
+/// Live grids - logs, prices, telemetry - are much easier to read when a
+/// change announces itself. The flash is keyed on [rowId] as well as the
+/// value so that a row scrolling or sorting into this position does not look
+/// like an update: only a genuine change to the same row flashes.
+class _ChangeFlash extends StatefulWidget {
+  const _ChangeFlash({
+    required this.rowId,
+    required this.value,
+    required this.duration,
+    required this.child,
+    this.color,
+  });
+
+  final Object rowId;
+  final String value;
+  final Color? color;
+  final Duration duration;
+  final Widget child;
+
+  @override
+  State<_ChangeFlash> createState() => _ChangeFlashState();
+}
+
+class _ChangeFlashState extends State<_ChangeFlash>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: widget.duration,
+  );
+
+  @override
+  void didUpdateWidget(_ChangeFlash old) {
+    super.didUpdateWidget(old);
+    if (old.rowId == widget.rowId && old.value != widget.value) {
+      _controller.forward(from: 0);
+    } else if (old.rowId != widget.rowId) {
+      // A different row took this slot: cancel rather than flash.
+      _controller.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.color;
+    if (color == null) return widget.child;
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        if (_controller.value == 0 || _controller.isCompleted) return child!;
+        // Fade out rather than in: the change should be loudest the moment
+        // it happens.
+        final strength = 1 - _controller.value;
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.38 * strength),
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: child,
+        );
+      },
+      child: widget.child,
     );
   }
 }

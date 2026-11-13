@@ -26,11 +26,12 @@ class CellDecoration {
     this.intensity = 1,
     this.bar,
     this.bold = false,
-  }) : assert(intensity >= 0 && intensity <= 1, 'intensity is a 0..1 fraction'),
-       assert(
-         bar == null || (bar >= 0 && bar <= 1),
-         'bar is a 0..1 fraction of the cell width',
-       );
+  })  : assert(
+            intensity >= 0 && intensity <= 1, 'intensity is a 0..1 fraction'),
+        assert(
+          bar == null || (bar >= 0 && bar <= 1),
+          'bar is a 0..1 fraction of the cell width',
+        );
 
   static const CellDecoration none = CellDecoration();
 
@@ -113,8 +114,7 @@ class ColumnStats {
   num? get minNumber => min is num ? min! as num : null;
   num? get maxNumber => max is num ? max! as num : null;
 
-  num? get mean =>
-      sum == null || count == 0 ? null : sum! / count;
+  num? get mean => sum == null || count == 0 ? null : sum! / count;
 
   bool get isEmpty => count == 0;
 
@@ -284,7 +284,8 @@ class ThresholdRule extends CellRule {
 
 /// Maps discrete values to tones, for status and severity columns.
 class ValueToneRule extends CellRule {
-  const ValueToneRule(this.tones, {this.caseSensitive = false, this.bold = true});
+  const ValueToneRule(this.tones,
+      {this.caseSensitive = false, this.bold = true});
 
   /// Value to tone, e.g. `{'error': CellTone.severe, 'warn': CellTone.caution}`.
   final Map<Object?, CellTone> tones;

@@ -1,4 +1,20 @@
+import 'package:lattice_core/lattice_core.dart';
 import 'package:material_ui/material_ui.dart';
+
+/// How much room each row gets.
+///
+/// Density is the single setting people reach for first on a data grid: the
+/// same table is a dashboard at one size and a spreadsheet at another.
+enum GridDensity {
+  /// Spreadsheet-tight, for scanning a lot of rows at once.
+  compact,
+
+  /// The default.
+  standard,
+
+  /// Roomy, for touch.
+  comfortable,
+}
 
 /// Visual configuration for [LatticeDataGrid].
 ///
@@ -36,15 +52,25 @@ class LatticeGridTheme {
     this.stripeRows = false,
     this.groupIndent = 20,
     this.resizeHandleWidth = 10,
+    this.tones = const {},
+    this.dataBarOpacity = 0.28,
+    this.changeFlashColor,
+    this.changeFlashDuration = const Duration(milliseconds: 900),
   });
 
   /// Builds a theme from the ambient Material theme.
-  factory LatticeGridTheme.of(BuildContext context) {
-    return LatticeGridTheme.fromTheme(Theme.of(context));
+  factory LatticeGridTheme.of(
+    BuildContext context, {
+    GridDensity density = GridDensity.standard,
+  }) {
+    return LatticeGridTheme.fromTheme(Theme.of(context), density: density);
   }
 
   /// Builds a theme from an explicit [ThemeData].
-  factory LatticeGridTheme.fromTheme(ThemeData theme) {
+  factory LatticeGridTheme.fromTheme(
+    ThemeData theme, {
+    GridDensity density = GridDensity.standard,
+  }) {
     final scheme = theme.colorScheme;
     final isDark = scheme.brightness == Brightness.dark;
     final text = theme.textTheme;
@@ -141,6 +167,37 @@ class LatticeGridTheme {
   /// Width of the invisible drag target at a header's trailing edge.
   final double resizeHandleWidth;
 
+  /// Colour for each semantic [CellTone] produced by a [CellRule].
+  ///
+  /// The engine decides that a value is severe; this decides what severe
+  /// looks like, which is why the mapping lives in the theme.
+  final Map<CellTone, Color> tones;
+
+  /// Opacity of a data bar at full width.
+  final double dataBarOpacity;
+
+  /// Colour a cell flashes when its value changes, with
+  /// `LatticeDataGrid.highlightChanges`.
+  final Color? changeFlashColor;
+
+  final Duration changeFlashDuration;
+
+  /// The colour for [tone], or [cellTextStyle]'s colour when unmapped.
+  Color toneColor(CellTone tone) =>
+      tones[tone] ?? cellTextStyle.color ?? const Color(0xFF000000);
+
+  /// Background tint for a decorated cell, scaled by its intensity.
+  ///
+  /// Returns null for a neutral or inert decoration, so an undecorated cell
+  /// costs no colour blending at all.
+  Color? backgroundFor(CellDecoration decoration) {
+    if (decoration.tone == CellTone.neutral || decoration.intensity <= 0) {
+      return null;
+    }
+    return toneColor(decoration.tone)
+        .withValues(alpha: 0.05 + 0.22 * decoration.intensity);
+  }
+
   /// Background for a data row, before selection and hover are applied.
   Color backgroundForRow(int index) {
     if (!stripeRows) return rowBackground;
@@ -176,6 +233,10 @@ class LatticeGridTheme {
     bool? stripeRows,
     double? groupIndent,
     double? resizeHandleWidth,
+    Map<CellTone, Color>? tones,
+    double? dataBarOpacity,
+    Color? changeFlashColor,
+    Duration? changeFlashDuration,
   }) {
     return LatticeGridTheme(
       headerBackground: headerBackground ?? this.headerBackground,
@@ -211,6 +272,10 @@ class LatticeGridTheme {
       stripeRows: stripeRows ?? this.stripeRows,
       groupIndent: groupIndent ?? this.groupIndent,
       resizeHandleWidth: resizeHandleWidth ?? this.resizeHandleWidth,
+      tones: tones ?? this.tones,
+      dataBarOpacity: dataBarOpacity ?? this.dataBarOpacity,
+      changeFlashColor: changeFlashColor ?? this.changeFlashColor,
+      changeFlashDuration: changeFlashDuration ?? this.changeFlashDuration,
     );
   }
 }
