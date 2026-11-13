@@ -294,7 +294,8 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
   bool _isDoubleTap(CellAddress cell) {
     final now = DateTime.now();
     final previous = _lastTapAt;
-    final isRepeat = _lastTapCell == cell &&
+    final isRepeat =
+        _lastTapCell == cell &&
         previous != null &&
         now.difference(previous) <= kDoubleTapTimeout;
     _lastTapCell = cell;

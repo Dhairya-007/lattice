@@ -336,7 +336,7 @@ void main() {
       expect(find.text('Keyboard'), findsOneWidget);
     });
 
-    testWidgets('two slow taps on one cell do not start an edit', (tester) async {
+    testWidgets('two slow taps do not start an edit', (tester) async {
       final controller = makeController();
       await tester.pumpWidget(
         host(LatticeDataGrid<Product>(controller: controller)),
@@ -529,8 +529,7 @@ void main() {
       expect(find.text('Page 3 of 3'), findsOneWidget);
     });
 
-    testWidgets('a page size outside the offered list still renders',
-        (tester) async {
+    testWidgets('an unoffered page size still renders', (tester) async {
       await tester.pumpWidget(
         host(
           LatticeDataGrid<Product>(
