@@ -1,0 +1,46 @@
+name: Feature request
+description: Suggest a capability the grid does not have
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to do that the grid makes hard? Describe the
+        situation rather than the feature - there may be a better answer than
+        the one you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Workarounds, other packages, or a reason none of them fit.
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Which layer
+      options:
+        - Engine behaviour (lattice_core)
+        - Flutter rendering or interaction (lattice_flutter)
+        - A future adapter (Angular, React)
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Would you be up for sending a PR?
+      options:
+        - label: I would be happy to implement this with some direction

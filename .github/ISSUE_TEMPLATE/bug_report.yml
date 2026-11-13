@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in the grid behaves incorrectly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The most useful report is one that can be
+        reproduced from a code snippet - if you can narrow it to engine
+        behaviour, a `lattice_core` test case is the fastest possible fix.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did the grid do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >
+        A minimal snippet: the columns, the data source and the calls that lead
+        to it. A failing test is even better.
+      render: dart
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `flutter --version` plus the lattice versions you are on.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Where do you think it lives
+      options:
+        - lattice_core (behaviour - sorting, filtering, grouping, selection, editing)
+        - lattice_flutter (rendering, gestures, scrolling, layout)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: rows
+    attributes:
+      label: Row count
+      description: Roughly how many rows, if it only shows up with a lot of data.

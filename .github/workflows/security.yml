@@ -1,0 +1,83 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so a newly disclosed advisory in a resolved dependency surfaces
+    # without waiting for the next pull request.
+    - cron: '17 6 * * 1'
+
+# CodeQL has no Dart analyzer, so the useful checks here are supply chain ones
+# plus the Dart analyzer itself, which CI already runs with infos fatal.
+permissions:
+  contents: read
+
+jobs:
+  osv-scan:
+    name: OSV scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both SDKs, because OSV matches advisories against resolved versions
+      # and the lockfiles are deliberately not committed for a library.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # Each package is resolved only if present, so a branch that predates
+      # one of them still gets scanned instead of failing here.
+      - name: Resolve dependencies
+        run: |
+          for dir in packages/lattice_core packages/lattice_flutter packages/lattice_flutter/example; do
+            if [ -f "$dir/pubspec.yaml" ]; then
+              echo "Resolving $dir"
+              (cd "$dir" && flutter pub get)
+            else
+              echo "Skipping $dir (not present)"
+            fi
+          done
+
+      - uses: google/osv-scanner-action/osv-scanner-action@v2.7.1
+        with:
+          scan-args: |-
+            --recursive
+            ./
+
+  engine-purity:
+    name: Engine stays dependency-free
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # lattice_core is pure computation on purpose: no network, no
+      # filesystem, no environment, no runtime dependencies. That is what
+      # keeps it auditable, so it is enforced rather than documented.
+      - name: Reject runtime dependencies in lattice_core
+        run: |
+          if grep -qE '^dependencies:' packages/lattice_core/pubspec.yaml; then
+            echo 'lattice_core must have no runtime dependencies.'
+            echo 'See SECURITY.md. dev_dependencies are fine.'
+            exit 1
+          fi
+
+      - name: Reject dart:io, dart:html and dart:ffi in lattice_core
+        run: |
+          if grep -rnE "import 'dart:(io|html|ffi)'" packages/lattice_core/lib; then
+            echo 'lattice_core must not touch the filesystem, network or FFI.'
+            exit 1
+          fi
+          echo 'Engine is clean.'
+
+      - name: Reject the deprecated Material shim
+        if: hashFiles('packages/lattice_flutter/pubspec.yaml') != ''
+        run: |
+          if grep -rn "package:flutter/material.dart" packages/lattice_flutter/lib packages/lattice_flutter/test 2>/dev/null; then
+            echo 'Material lives in package:material_ui since Flutter 3.47.'
+            exit 1
+          fi
+          echo 'No deprecated Material imports.'
