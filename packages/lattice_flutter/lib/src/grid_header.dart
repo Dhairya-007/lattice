@@ -52,15 +52,36 @@ class LatticeHeaderCell<T> extends StatelessWidget {
       if (column.effectiveAlign == ColumnAlign.end) Flexible(child: label),
       if (sort != null) ...[
         const SizedBox(width: 4),
-        Icon(
-          sort.isAscending ? Icons.arrow_upward : Icons.arrow_downward,
-          size: 14,
-          color: theme.headerForeground,
+        // Half a turn rather than two icons, so reversing a sort reads as
+        // the same arrow turning over.
+        AnimatedRotation(
+          turns: sort.isAscending ? 0 : 0.5,
+          duration: theme.animations
+              ? theme.animationDuration * 1.6
+              : Duration.zero,
+          curve: Curves.easeOutBack,
+          child: Icon(
+            Icons.arrow_upward,
+            size: 14,
+            color: theme.focusedCellBorder,
+          ),
         ),
         if (showPriority)
-          Text(
-            '$priority',
-            style: theme.headerTextStyle.copyWith(fontSize: 10),
+          Container(
+            margin: const EdgeInsets.only(left: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              color: theme.focusedCellBorder.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              '$priority',
+              style: theme.headerTextStyle.copyWith(
+                fontSize: 9,
+                height: 1,
+                color: theme.focusedCellBorder,
+              ),
+            ),
           ),
       ],
     ];
@@ -107,6 +128,7 @@ class LatticeHeaderCell<T> extends StatelessWidget {
                   controller: controller,
                   column: column,
                   startWidth: width,
+                  theme: theme,
                 ),
               ),
           ],
@@ -122,11 +144,13 @@ class _ResizeHandle<T> extends StatefulWidget {
     required this.controller,
     required this.column,
     required this.startWidth,
+    required this.theme,
   });
 
   final GridController<T> controller;
   final GridColumn<T> column;
   final double startWidth;
+  final LatticeGridTheme theme;
 
   @override
   State<_ResizeHandle<T>> createState() => _ResizeHandleState<T>();
@@ -134,23 +158,48 @@ class _ResizeHandle<T> extends StatefulWidget {
 
 class _ResizeHandleState<T> extends State<_ResizeHandle<T>> {
   double _width = 0;
+  bool _dragging = false;
+  bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
+    final theme = widget.theme;
+    final active = _dragging || _hovered;
     return MouseRegion(
       cursor: SystemMouseCursors.resizeLeftRight,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
         // Accumulate from the width at drag start rather than reading it back
         // each frame: the controller clamps, so feeding the clamped value back
         // in would make the drag stick at the minimum.
-        onHorizontalDragStart: (_) => _width = widget.startWidth,
+        onHorizontalDragStart: (_) {
+          _width = widget.startWidth;
+          setState(() => _dragging = true);
+        },
         onHorizontalDragUpdate: (details) {
           _width += details.delta.dx;
           widget.controller.resizeColumn(widget.column.field, _width);
         },
+        onHorizontalDragEnd: (_) => setState(() => _dragging = false),
+        onHorizontalDragCancel: () => setState(() => _dragging = false),
         onDoubleTap: () =>
             widget.controller.resetColumnWidth(widget.column.field),
+        // A grip that shows up under the cursor, so the drag target is
+        // discoverable instead of being an invisible strip you find by luck.
+        child: Center(
+          child: AnimatedContainer(
+            duration: theme.animations
+                ? theme.animationDuration
+                : Duration.zero,
+            width: active ? 2 : 0,
+            decoration: BoxDecoration(
+              color: theme.focusedCellBorder,
+              borderRadius: BorderRadius.circular(1),
+            ),
+          ),
+        ),
       ),
     );
   }

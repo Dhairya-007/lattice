@@ -7,6 +7,7 @@ import 'grid_cell.dart';
 import 'grid_header.dart';
 import 'group_row.dart';
 import 'pager.dart';
+import 'skeleton.dart';
 import 'synced_scroll.dart';
 import 'theme.dart';
 
@@ -360,33 +361,48 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
       focusNode: _focus,
       autofocus: widget.autofocus,
       onKeyEvent: _onKey,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final layout = _controller.layoutFor(constraints.maxWidth);
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (widget.showHeader)
-                for (var i = 0; i < _controller.stackedHeaders.length; i++)
-                  _buildStackedHeaderRow(
-                    _controller.stackedHeaders[i],
-                    i,
-                    layout,
-                    theme,
+      child: _rounded(
+        theme,
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final layout = _controller.layoutFor(constraints.maxWidth);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (widget.showHeader)
+                  for (var i = 0; i < _controller.stackedHeaders.length; i++)
+                    _buildStackedHeaderRow(
+                      _controller.stackedHeaders[i],
+                      i,
+                      layout,
+                      theme,
+                    ),
+                if (widget.showHeader) _buildHeader(layout, theme),
+                if (widget.showFilterRow) _buildFilterRow(layout, theme),
+                Expanded(child: _buildBody(layout, theme)),
+                if (widget.showFooter)
+                  LatticeGridFooter<T>(
+                    controller: _controller,
+                    theme: theme,
+                    pageSizes: widget.pageSizes,
                   ),
-              if (widget.showHeader) _buildHeader(layout, theme),
-              if (widget.showFilterRow) _buildFilterRow(layout, theme),
-              Expanded(child: _buildBody(layout, theme)),
-              if (widget.showFooter)
-                LatticeGridFooter<T>(
-                  controller: _controller,
-                  theme: theme,
-                  pageSizes: widget.pageSizes,
-                ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
       ),
+    );
+  }
+
+  /// Clips the grid to the theme's corner radius, when it asks for one.
+  ///
+  /// Clipping is not free, so a square grid - the default, and what a dense
+  /// table usually wants - skips the clip entirely.
+  Widget _rounded(LatticeGridTheme theme, Widget child) {
+    if (theme.cornerRadius <= 0) return child;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(theme.cornerRadius),
+      child: child,
     );
   }
 
@@ -580,8 +596,13 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
           );
     }
     if (_controller.isLoading && _controller.rowCount == 0) {
+      // A skeleton in the shape of the grid, rather than a spinner: it says
+      // what is coming and stops the layout jumping when it arrives.
       return widget.loadingState ??
-          const Center(child: CircularProgressIndicator());
+          LatticeSkeleton(
+            theme: theme,
+            columnWidths: [for (final c in layout.allColumns) c.width],
+          );
     }
     if (_controller.rowCount == 0) {
       return widget.emptyState ??
@@ -920,22 +941,46 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
         ? theme.hoveredRowBackground
         : theme.backgroundForRow(index);
 
+    final decoration = BoxDecoration(
+      color: background,
+      border: theme.showHorizontalGridLines
+          ? Border(
+              bottom: BorderSide(
+                color: theme.gridLine,
+                width: theme.gridLineWidth,
+              ),
+            )
+          : null,
+    );
+
+    // An accent down the leading edge: a tint alone is easy to miss against
+    // striped rows. It goes in the foreground so it paints over the row
+    // instead of taking width from it, and only in the first pane, so a
+    // frozen column does not produce a second bar mid-row.
+    final accent = isFirstPane && theme.selectionAccentWidth > 0
+        ? BoxDecoration(
+            border: Border(
+              left: BorderSide(
+                color: isSelected
+                    ? theme.focusedCellBorder
+                    : const Color(0x00000000),
+                width: theme.selectionAccentWidth,
+              ),
+            ),
+          )
+        : null;
+
     return MouseRegion(
       onEnter: (_) => _setHovered(index),
       onExit: (_) => _setHovered(null),
-      child: Container(
+      child: AnimatedContainer(
+        // Only visible rows exist, so this is a viewport's worth of
+        // implicit animations, not one per row in the data.
+        duration: theme.animations ? theme.animationDuration : Duration.zero,
+        curve: Curves.easeOut,
         height: height,
-        decoration: BoxDecoration(
-          color: background,
-          border: theme.showHorizontalGridLines
-              ? Border(
-                  bottom: BorderSide(
-                    color: theme.gridLine,
-                    width: theme.gridLineWidth,
-                  ),
-                )
-              : null,
-        ),
+        decoration: decoration,
+        foregroundDecoration: accent,
         child: Row(
           children: [
             for (var i = 0; i < columns.length; i++)

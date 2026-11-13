@@ -48,6 +48,11 @@ class LatticeGridTheme {
     this.frozenRowBackground,
     this.frozenRowDividerWidth = 1.5,
     this.checkboxColumnWidth = 48,
+    this.selectionAccentWidth = 3,
+    this.animations = true,
+    this.animationDuration = const Duration(milliseconds: 120),
+    this.cornerRadius = 0,
+    this.headerLetterSpacing = 0.2,
     this.filterRowHeight = 40,
     this.footerHeight = 48,
     this.cellPadding = const EdgeInsets.symmetric(horizontal: 12),
@@ -117,6 +122,7 @@ class LatticeGridTheme {
       headerTextStyle: (text.labelLarge ?? const TextStyle()).copyWith(
         fontWeight: FontWeight.w600,
         color: scheme.onSurface,
+        letterSpacing: 0.2,
       ),
       cellTextStyle: (text.bodyMedium ?? const TextStyle()).copyWith(
         color: scheme.onSurface,
@@ -217,6 +223,29 @@ class LatticeGridTheme {
 
   /// Width of the selection checkbox column.
   final double checkboxColumnWidth;
+
+  /// Width of the accent bar drawn down the leading edge of a selected row.
+  ///
+  /// A tint alone is easy to miss against a striped background; the bar is
+  /// what makes a selection readable at a glance.
+  final double selectionAccentWidth;
+
+  /// Whether hover and selection changes are animated.
+  ///
+  /// Only ever applied to rows that exist, which virtualization already
+  /// caps at a viewport's worth - but a grid embedded in something already
+  /// busy can switch them off.
+  final bool animations;
+
+  final Duration animationDuration;
+
+  /// Rounding of the grid's outer corners. Zero keeps the square edge a
+  /// dense table usually wants.
+  final double cornerRadius;
+
+  /// Tracking on header labels. A little makes a dense header easier to
+  /// scan; a lot makes it look like a banner.
+  final double headerLetterSpacing;
   final double filterRowHeight;
   final double footerHeight;
   final EdgeInsets cellPadding;
@@ -295,6 +324,11 @@ class LatticeGridTheme {
     Color? frozenRowBackground,
     double? frozenRowDividerWidth,
     double? checkboxColumnWidth,
+    double? selectionAccentWidth,
+    bool? animations,
+    Duration? animationDuration,
+    double? cornerRadius,
+    double? headerLetterSpacing,
     double? filterRowHeight,
     double? footerHeight,
     EdgeInsets? cellPadding,
