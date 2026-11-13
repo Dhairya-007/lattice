@@ -39,28 +39,45 @@ jobs:
   flutter:
     name: lattice_flutter (widgets)
     runs-on: ubuntu-latest
-    # Added in the same run as the Flutter adapter; skipped until its
-    # pubspec exists so the first PRs are not blocked by a missing package.
-    if: ${{ hashFiles('packages/lattice_flutter/pubspec.yaml') != '' }}
-    defaults:
-      run:
-        working-directory: packages/lattice_flutter
     steps:
       - uses: actions/checkout@v4
 
+      # The adapter lands in a later PR. Until its pubspec exists the rest of
+      # this job is skipped, so the first PRs are not blocked by a package
+      # that is not there yet. hashFiles cannot be used in a job-level `if`,
+      # which needs a checked-out workspace, so the check is a step.
+      - name: Look for the package
+        id: check
+        run: |
+          if [ -f packages/lattice_flutter/pubspec.yaml ]; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+            echo 'packages/lattice_flutter not present yet; skipping.'
+          fi
+
       - uses: subosito/flutter-action@v2
+        if: steps.check.outputs.exists == 'true'
         with:
           channel: stable
           cache: true
 
       - name: Install dependencies
+        if: steps.check.outputs.exists == 'true'
+        working-directory: packages/lattice_flutter
         run: flutter pub get
 
       - name: Check formatting
+        if: steps.check.outputs.exists == 'true'
+        working-directory: packages/lattice_flutter
         run: dart format --output=none --set-exit-if-changed .
 
       - name: Analyze
+        if: steps.check.outputs.exists == 'true'
+        working-directory: packages/lattice_flutter
         run: flutter analyze
 
       - name: Test
+        if: steps.check.outputs.exists == 'true'
+        working-directory: packages/lattice_flutter
         run: flutter test --reporter expanded
