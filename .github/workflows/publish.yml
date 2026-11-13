@@ -1,0 +1,41 @@
+name: Publish to pub.dev
+
+# Automated publishing via OIDC: no credentials are stored in this repo.
+# Before the first automated run, enable "Automated publishing" on each
+# package's pub.dev admin page and point it at this repository with the tag
+# pattern below. The very first version of a package has to be published
+# manually with `dart pub publish`, which is what claims the name.
+on:
+  push:
+    tags:
+      - 'lattice_core-v[0-9]+.[0-9]+.[0-9]+'
+      - 'lattice_flutter-v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # required for pub.dev OIDC
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the package from the tag
+        id: package
+        run: echo "name=${GITHUB_REF_NAME%%-v*}" >> "$GITHUB_OUTPUT"
+
+      - uses: dart-lang/setup-dart@v1
+
+      - uses: subosito/flutter-action@v2
+        if: steps.package.outputs.name == 'lattice_flutter'
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/${{ steps.package.outputs.name }}
+        run: dart pub get
+
+      - name: Publish
+        working-directory: packages/${{ steps.package.outputs.name }}
+        run: dart pub publish --force
