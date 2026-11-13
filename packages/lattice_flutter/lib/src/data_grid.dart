@@ -580,18 +580,8 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     Widget band(List<GridRow<T>> rows, int offset, ScrollController h) {
       return SizedBox(
         height: bandHeight(rows),
-        child: Container(
-          decoration: BoxDecoration(
-            color: theme.frozenRowBackground ?? theme.headerBackground,
-            border: Border(
-              top: offset == 0
-                  ? BorderSide.none
-                  : BorderSide(color: theme.frozenPaneLine, width: 1.5),
-              bottom: offset == 0
-                  ? BorderSide(color: theme.frozenPaneLine, width: 1.5)
-                  : BorderSide.none,
-            ),
-          ),
+        child: ColoredBox(
+          color: theme.frozenRowBackground ?? theme.headerBackground,
           child: _buildPanes(
             layout: layout,
             theme: theme,
@@ -614,6 +604,13 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
         ),
       );
     }
+
+    // The divider is a sibling rather than a border on the band, so the
+    // band's height stays exactly the height of its rows.
+    Widget divider() => Container(
+      height: theme.frozenRowDividerWidth,
+      color: theme.frozenPaneLine,
+    );
 
     final scrolling = Scrollbar(
       controller: _vScrolling,
@@ -651,15 +648,19 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
         : Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (frozenTop > 0)
+              if (frozenTop > 0) ...[
                 band(_controller.frozenTopRows, 0, _hFrozenTop),
+                divider(),
+              ],
               Expanded(child: scrolling),
-              if (frozenBottom > 0)
+              if (frozenBottom > 0) ...[
+                divider(),
                 band(
                   _controller.frozenBottomRows,
                   _controller.rowCount - frozenBottom,
                   _hFrozenBottom,
                 ),
+              ],
             ],
           );
 
