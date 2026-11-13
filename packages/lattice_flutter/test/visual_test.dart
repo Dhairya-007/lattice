@@ -184,8 +184,13 @@ void main() {
       await tester.drag(find.text('Row 2'), const Offset(0, -300));
       await tester.pumpAndSettle();
 
-      // Two now: the one in the list, and the pinned copy on top.
-      expect(find.text('Category: Alpha'), findsNWidgets(2));
+      // The list has scrolled past its own header - Row 0 is gone with it -
+      // yet the group is still named at the top of the viewport.
+      expect(find.text('Row 0'), findsNothing);
+      expect(find.text('Category: Alpha'), findsOneWidget);
+      final pinned = tester.getRect(find.text('Category: Alpha'));
+      final firstVisibleRow = tester.getRect(find.text('Row 8').first);
+      expect(pinned.top, lessThan(firstVisibleRow.top));
       expect(tester.takeException(), isNull);
     });
 
