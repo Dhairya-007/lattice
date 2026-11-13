@@ -18,6 +18,19 @@
 
 ---
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/anatomy-dark.svg"/>
+    <img alt="Anatomy of the Lattice data grid: frozen column, sortable header, filter row, group row with a subtotal, a selected range, a cell being edited with a validation error, virtualized rows and a summary footer" src="docs/anatomy-light.svg" width="100%"/>
+  </picture>
+</p>
+
+<p align="center">
+  <sub>Every part labelled above is a feature, not a mock-up of one. This is a
+  diagram rather than a screenshot — for the running app, see
+  <a href="#the-demo-app">the demo app</a>.</sub>
+</p>
+
 Every serious data grid for Flutter is either commercial or a styled
 `DataTable` that falls over at ten thousand rows. Lattice is the third option:
 the feature set you would pay for, under MIT, with the engine deliberately
@@ -114,12 +127,60 @@ dependencies:
   lattice_flutter: ^0.1.0
 ```
 
-Then run the demo, which puts 20,000 generated log lines behind the grid with
-grouping, pagination, a filter row, custom cell widgets and editable cells:
+### The demo app
+
+20,000 generated log lines behind the grid, with grouping, pagination, a
+filter row, custom cell widgets, a severity-aware comparator and editable
+cells:
 
 ```bash
 cd packages/lattice_flutter/example && flutter run
 ```
+
+<!-- Drop a recording at docs/demo.gif and it appears here. docs/demo.md has
+     the capture commands and a shot list. -->
+
+### The engine, with no Flutter at all
+
+The whole pipeline runs from the command line, which is also how it is
+smoke-tested on machines without the Flutter SDK:
+
+```
+$ dart run example/lattice_core_example.dart
+
+-- sorted by salary, highest first
+Gita        Engineering $156k       2018
+Asha        Engineering $142k       2021
+Bruno       Engineering $128k       2022
+Farah       Sales       $115k       2024
+Dalia       Design      $104k       2023
+Chen        Design      $96k        2020
+Emre        Sales       $88k        2019
+
+-- grouped by department, with aggregates
+Design (2)
+  Dalia       Design      $104k       2023
+  Chen        Design      $96k        2020
+Engineering (3)
+  Gita        Engineering $156k       2018
+  ...
+payroll total: 829000
+```
+
+### Speed
+
+`dart run benchmark/grid_benchmark.dart`, median of 7 runs, milliseconds:
+
+| operation | 10k rows | 50k rows |
+| --- | --- | --- |
+| first load | 0.05 | 0.39 |
+| sort by one column | 4.4 | 28.2 |
+| filter one column | 1.9 | 5.6 |
+| search, per keystroke | 1.2 | 6.5 |
+| page change | 0.01 | 0.01 |
+| group with 3 aggregates | 0.6 | 1.5 |
+
+Everything except a large sort fits inside a 16.7 ms frame at 50k rows.
 
 ## Status
 
