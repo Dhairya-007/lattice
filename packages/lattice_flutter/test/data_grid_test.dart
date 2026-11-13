@@ -12,35 +12,35 @@ class Product {
 }
 
 List<Product> sample() => [
-      Product('Keyboard', 'Input', 80),
-      Product('Mouse', 'Input', 25),
-      Product('Monitor', 'Display', 320),
-      Product('Laptop', 'Compute', 1450),
-      Product('Dock', 'Compute', 180),
-    ];
+  Product('Keyboard', 'Input', 80),
+  Product('Mouse', 'Input', 25),
+  Product('Monitor', 'Display', 320),
+  Product('Laptop', 'Compute', 1450),
+  Product('Dock', 'Compute', 180),
+];
 
 List<GridColumn<Product>> columns() => [
-      GridColumn<Product>(
-        field: 'name',
-        value: (p) => p.name,
-        setValue: (p, v) {
-          p.name = (v ?? '') as String;
-          return null;
-        },
-        validator: requiredValue(),
-      ),
-      GridColumn<Product>(field: 'category', value: (p) => p.category),
-      GridColumn<Product>(
-        field: 'price',
-        type: ColumnType.number,
-        value: (p) => p.price,
-        setValue: (p, v) {
-          p.price = (v ?? 0) as num;
-          return null;
-        },
-        validator: numberRange(min: 0),
-      ),
-    ];
+  GridColumn<Product>(
+    field: 'name',
+    value: (p) => p.name,
+    setValue: (p, v) {
+      p.name = (v ?? '') as String;
+      return null;
+    },
+    validator: requiredValue(),
+  ),
+  GridColumn<Product>(field: 'category', value: (p) => p.category),
+  GridColumn<Product>(
+    field: 'price',
+    type: ColumnType.number,
+    value: (p) => p.price,
+    setValue: (p, v) {
+      p.price = (v ?? 0) as num;
+      return null;
+    },
+    validator: numberRange(min: 0),
+  ),
+];
 
 GridController<Product> makeController({
   List<GridColumn<Product>>? cols,
@@ -146,25 +146,22 @@ void main() {
           .copyWith(rowHeight: 72, headerHeight: 80);
       await tester.pumpWidget(
         host(
-          LatticeDataGrid<Product>(
-            controller: makeController(),
-            theme: theme,
-          ),
+          LatticeDataGrid<Product>(controller: makeController(), theme: theme),
         ),
       );
       final header = tester.getSize(
-        find.ancestor(
-          of: find.text('Name'),
-          matching: find.byType(SizedBox),
-        ).first,
+        find
+            .ancestor(of: find.text('Name'), matching: find.byType(SizedBox))
+            .first,
       );
       expect(header.height, greaterThan(0));
     });
   });
 
   group('sorting from the header', () {
-    testWidgets('tapping a header sorts, then reverses, then clears',
-        (tester) async {
+    testWidgets('tapping a header sorts, then reverses, then clears', (
+      tester,
+    ) async {
       final controller = makeController();
       await tester.pumpWidget(
         host(LatticeDataGrid<Product>(controller: controller)),
@@ -199,8 +196,9 @@ void main() {
       expect(controller.sorts, isEmpty);
     });
 
-    testWidgets('sort levels are numbered when there is more than one',
-        (tester) async {
+    testWidgets('sort levels are numbered when there is more than one', (
+      tester,
+    ) async {
       final controller = makeController(
         sorts: const [SortSpec('category'), SortSpec('price')],
       );
@@ -234,8 +232,9 @@ void main() {
       expect(find.text('1 selected'), findsOneWidget);
     });
 
-    testWidgets('onRowTap and onCellTap fire with the tapped row',
-        (tester) async {
+    testWidgets('onRowTap and onCellTap fire with the tapped row', (
+      tester,
+    ) async {
       Product? tappedRow;
       CellAddress? tappedCell;
       await tester.pumpWidget(
@@ -256,12 +255,7 @@ void main() {
     testWidgets('arrow keys move the active cell', (tester) async {
       final controller = makeController(selectionMode: SelectionMode.cellRange);
       await tester.pumpWidget(
-        host(
-          LatticeDataGrid<Product>(
-            controller: controller,
-            autofocus: true,
-          ),
-        ),
+        host(LatticeDataGrid<Product>(controller: controller, autofocus: true)),
       );
       await tester.tap(find.text('Keyboard'));
       await tester.pump();
@@ -278,9 +272,7 @@ void main() {
     testWidgets('arrow keys stop at the edges', (tester) async {
       final controller = makeController(selectionMode: SelectionMode.cellRange);
       await tester.pumpWidget(
-        host(
-          LatticeDataGrid<Product>(controller: controller, autofocus: true),
-        ),
+        host(LatticeDataGrid<Product>(controller: controller, autofocus: true)),
       );
       await tester.tap(find.text('Keyboard'));
       await tester.pump();
@@ -359,8 +351,9 @@ void main() {
       expect(controller.dataAt(0)!.price, 99.5);
     });
 
-    testWidgets('a non-editable column does not open an editor',
-        (tester) async {
+    testWidgets('a non-editable column does not open an editor', (
+      tester,
+    ) async {
       final controller = makeController();
       await tester.pumpWidget(
         host(LatticeDataGrid<Product>(controller: controller)),
@@ -393,8 +386,9 @@ void main() {
   });
 
   group('grouping', () {
-    testWidgets('group headers render with counts and collapse on tap',
-        (tester) async {
+    testWidgets('group headers render with counts and collapse on tap', (
+      tester,
+    ) async {
       final controller = makeController(groups: const [GroupSpec('category')]);
       await tester.pumpWidget(
         host(LatticeDataGrid<Product>(controller: controller)),
@@ -427,10 +421,7 @@ void main() {
       final controller = makeController();
       await tester.pumpWidget(
         host(
-          LatticeDataGrid<Product>(
-            controller: controller,
-            showFilterRow: true,
-          ),
+          LatticeDataGrid<Product>(controller: controller, showFilterRow: true),
         ),
       );
       expect(find.byType(TextField), findsNWidgets(3));
@@ -441,15 +432,13 @@ void main() {
       expect(find.text('Keyboard'), findsNothing);
     });
 
-    testWidgets('a number filter uses equality once the text parses',
-        (tester) async {
+    testWidgets('a number filter uses equality once the text parses', (
+      tester,
+    ) async {
       final controller = makeController();
       await tester.pumpWidget(
         host(
-          LatticeDataGrid<Product>(
-            controller: controller,
-            showFilterRow: true,
-          ),
+          LatticeDataGrid<Product>(controller: controller, showFilterRow: true),
         ),
       );
       await tester.enterText(find.byType(TextField).last, 'abc');
@@ -493,8 +482,9 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('a narrow viewport still lays out without overflow',
-        (tester) async {
+    testWidgets('a narrow viewport still lays out without overflow', (
+      tester,
+    ) async {
       final cols = columns();
       cols[0] = cols[0].copyWith(pin: ColumnPin.start);
       await tester.pumpWidget(
@@ -553,18 +543,18 @@ void main() {
       expect(find.text('Row 0'), findsOneWidget);
       expect(find.text('Row 1500'), findsNothing);
       // Far fewer cells than 2000 rows worth are in the tree.
-      final builtCells =
-          tester.widgetList(find.byType(LatticeCell<Product>)).length;
+      final builtCells = tester
+          .widgetList(find.byType(LatticeCell<Product>))
+          .length;
       expect(builtCells, lessThan(200));
     });
 
-    testWidgets('frozen and scrolling panes stay in sync vertically',
-        (tester) async {
+    testWidgets('frozen and scrolling panes stay in sync vertically', (
+      tester,
+    ) async {
       final cols = columns();
       cols[0] = cols[0].copyWith(pin: ColumnPin.start);
-      final rows = [
-        for (var i = 0; i < 200; i++) Product('Row $i', 'Bulk', i),
-      ];
+      final rows = [for (var i = 0; i < 200; i++) Product('Row $i', 'Bulk', i)];
       await tester.pumpWidget(
         host(
           LatticeDataGrid<Product>(
@@ -611,8 +601,9 @@ void main() {
       expect(find.text('Only'), findsOneWidget);
     });
 
-    testWidgets('disposing the grid leaves the controller usable',
-        (tester) async {
+    testWidgets('disposing the grid leaves the controller usable', (
+      tester,
+    ) async {
       final controller = makeController();
       await tester.pumpWidget(
         host(LatticeDataGrid<Product>(controller: controller)),

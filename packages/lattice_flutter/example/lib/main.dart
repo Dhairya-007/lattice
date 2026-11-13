@@ -119,76 +119,72 @@ class _GridDemoPageState extends State<GridDemoPage> {
   }
 
   List<GridColumn<LogEntry>> _columns() => [
-        GridColumn<LogEntry>(
-          field: 'id',
-          title: '#',
-          type: ColumnType.number,
-          value: (r) => r.id,
-          width: 72,
-          pin: ColumnPin.start,
-          groupable: false,
-        ),
-        GridColumn<LogEntry>(
-          field: 'at',
-          title: 'Time',
-          type: ColumnType.date,
-          value: (r) => r.at,
-          width: 150,
-          format: (v) {
-            final at = v! as DateTime;
-            final h = at.hour.toString().padLeft(2, '0');
-            final m = at.minute.toString().padLeft(2, '0');
-            return '${at.day}/${at.month} $h:$m';
-          },
-        ),
-        GridColumn<LogEntry>(
-          field: 'service',
-          value: (r) => r.service,
-          width: 140,
-        ),
-        GridColumn<LogEntry>(
-          field: 'level',
-          value: (r) => r.level,
-          width: 110,
-          // Severity, not alphabet: error has to sort above warn.
-          comparator: (a, b) => _levels
-              .indexOf(a! as String)
-              .compareTo(_levels.indexOf(b! as String)),
-        ),
-        GridColumn<LogEntry>(
-          field: 'message',
-          value: (r) => r.message,
-          width: 320,
-          setValue: (r, v) {
-            r.message = (v ?? '') as String;
-            return null;
-          },
-          validator: requiredValue('A log line needs a message'),
-          groupable: false,
-        ),
-        GridColumn<LogEntry>(
-          field: 'latencyMs',
-          title: 'Latency',
-          type: ColumnType.number,
-          value: (r) => r.latencyMs,
-          width: 120,
-          format: (v) => '${v ?? 0} ms',
-          setValue: (r, v) {
-            r.latencyMs = (v ?? 0) as num;
-            return null;
-          },
-          validator: numberRange(min: 0, max: 60000),
-        ),
-        GridColumn<LogEntry>(
-          field: 'acknowledged',
-          title: 'Ack',
-          type: ColumnType.boolean,
-          value: (r) => r.acknowledged,
-          width: 90,
-          pin: ColumnPin.end,
-          groupable: false,
-        ),
-      ];
+    GridColumn<LogEntry>(
+      field: 'id',
+      title: '#',
+      type: ColumnType.number,
+      value: (r) => r.id,
+      width: 72,
+      pin: ColumnPin.start,
+      groupable: false,
+    ),
+    GridColumn<LogEntry>(
+      field: 'at',
+      title: 'Time',
+      type: ColumnType.date,
+      value: (r) => r.at,
+      width: 150,
+      format: (v) {
+        final at = v! as DateTime;
+        final h = at.hour.toString().padLeft(2, '0');
+        final m = at.minute.toString().padLeft(2, '0');
+        return '${at.day}/${at.month} $h:$m';
+      },
+    ),
+    GridColumn<LogEntry>(field: 'service', value: (r) => r.service, width: 140),
+    GridColumn<LogEntry>(
+      field: 'level',
+      value: (r) => r.level,
+      width: 110,
+      // Severity, not alphabet: error has to sort above warn.
+      comparator: (a, b) => _levels
+          .indexOf(a! as String)
+          .compareTo(_levels.indexOf(b! as String)),
+    ),
+    GridColumn<LogEntry>(
+      field: 'message',
+      value: (r) => r.message,
+      width: 320,
+      setValue: (r, v) {
+        r.message = (v ?? '') as String;
+        return null;
+      },
+      validator: requiredValue('A log line needs a message'),
+      groupable: false,
+    ),
+    GridColumn<LogEntry>(
+      field: 'latencyMs',
+      title: 'Latency',
+      type: ColumnType.number,
+      value: (r) => r.latencyMs,
+      width: 120,
+      format: (v) => '${v ?? 0} ms',
+      setValue: (r, v) {
+        r.latencyMs = (v ?? 0) as num;
+        return null;
+      },
+      validator: numberRange(min: 0, max: 60000),
+    ),
+    GridColumn<LogEntry>(
+      field: 'acknowledged',
+      title: 'Ack',
+      type: ColumnType.boolean,
+      value: (r) => r.acknowledged,
+      width: 90,
+      pin: ColumnPin.end,
+      groupable: false,
+    ),
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -304,7 +300,8 @@ class _GridDemoPageState extends State<GridDemoPage> {
               autofocus: true,
               theme: LatticeGridTheme.of(context).copyWith(stripeRows: true),
               cellBuilder: (context, column, row) {
-                if (column.field == 'level') return _LevelChip(level: row.level);
+                if (column.field == 'level')
+                  return _LevelChip(level: row.level);
                 if (column.field == 'acknowledged') {
                   return Icon(
                     row.acknowledged ? Icons.check_circle : Icons.remove,
@@ -354,7 +351,11 @@ class _LevelChip extends StatelessWidget {
       ),
       child: Text(
         level,
-        style: TextStyle(color: color, fontWeight: FontWeight.w600, fontSize: 12),
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w600,
+          fontSize: 12,
+        ),
       ),
     );
   }

@@ -35,7 +35,7 @@ class LatticeGridFooter<T> extends StatelessWidget {
       final column = controller.column(aggregation.field);
       parts.add(
         '${aggregation.label ?? '${column?.title ?? aggregation.field} '
-            '${aggregation.type.name}'}: $text',
+                '${aggregation.type.name}'}: $text',
       );
     }
     return parts.isEmpty ? null : parts.join('   ');
@@ -84,7 +84,10 @@ class LatticeGridFooter<T> extends StatelessWidget {
               style: theme.footerTextStyle,
               items: [
                 for (final size in pageSizes)
-                  DropdownMenuItem<int>(value: size, child: Text('$size / page')),
+                  DropdownMenuItem<int>(
+                    value: size,
+                    child: Text('$size / page'),
+                  ),
               ],
               onChanged: (size) {
                 if (size != null) controller.setPageSize(size);
@@ -94,13 +97,16 @@ class LatticeGridFooter<T> extends StatelessWidget {
             IconButton(
               icon: const Icon(Icons.first_page, size: 18),
               tooltip: 'First page',
-              onPressed:
-                  controller.hasPreviousPage ? () => controller.goToPage(0) : null,
+              onPressed: controller.hasPreviousPage
+                  ? () => controller.goToPage(0)
+                  : null,
             ),
             IconButton(
               icon: const Icon(Icons.chevron_left, size: 18),
               tooltip: 'Previous page',
-              onPressed: controller.hasPreviousPage ? controller.previousPage : null,
+              onPressed: controller.hasPreviousPage
+                  ? controller.previousPage
+                  : null,
             ),
             Text(
               'Page ${controller.pageIndex + 1} of ${controller.pageCount}',

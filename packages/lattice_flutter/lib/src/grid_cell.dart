@@ -142,9 +142,8 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
     super.initState();
     final session = widget.controller.editSession;
     final initial = session?.value;
-    _text = TextEditingController(
-      text: initial == null ? '' : '$initial',
-    )..selection = TextSelection(
+    _text = TextEditingController(text: initial == null ? '' : '$initial')
+      ..selection = TextSelection(
         baseOffset: 0,
         extentOffset: initial == null ? 0 : '$initial'.length,
       );
@@ -164,9 +163,7 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
   }
 
   void _commit() {
-    widget.controller.updateEdit(
-      coerceValue(_text.text, widget.column.type),
-    );
+    widget.controller.updateEdit(coerceValue(_text.text, widget.column.type));
     widget.controller.commitEdit();
   }
 
@@ -197,9 +194,7 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
           controller: _text,
           focusNode: _focus,
           style: theme.cellTextStyle,
-          textAlign: LatticeCell._textAlignFor(
-            widget.column.effectiveAlign,
-          ),
+          textAlign: LatticeCell._textAlignFor(widget.column.effectiveAlign),
           keyboardType: widget.column.type == ColumnType.number
               ? const TextInputType.numberWithOptions(
                   decimal: true,
@@ -210,16 +205,23 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
             isDense: true,
             filled: true,
             fillColor: Theme.of(context).colorScheme.surface,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 6,
+              vertical: 8,
+            ),
             enabledBorder: OutlineInputBorder(
               borderSide: BorderSide(
-                color: error == null ? theme.focusedCellBorder : theme.errorColor,
+                color: error == null
+                    ? theme.focusedCellBorder
+                    : theme.errorColor,
                 width: 2,
               ),
             ),
             focusedBorder: OutlineInputBorder(
               borderSide: BorderSide(
-                color: error == null ? theme.focusedCellBorder : theme.errorColor,
+                color: error == null
+                    ? theme.focusedCellBorder
+                    : theme.errorColor,
                 width: 2,
               ),
             ),

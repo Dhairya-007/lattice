@@ -146,8 +146,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
 
   GridController<T> get _controller => widget.controller;
 
-  double get _rowHeight =>
-      widget.rowHeight ?? _effectiveTheme.rowHeight;
+  double get _rowHeight => widget.rowHeight ?? _effectiveTheme.rowHeight;
 
   LatticeGridTheme get _effectiveTheme =>
       widget.theme ?? LatticeGridTheme.of(context);
@@ -197,14 +196,20 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
       _move(0, shift ? -1 : 1);
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.pageDown || key == LogicalKeyboardKey.pageUp) {
+    if (key == LogicalKeyboardKey.pageDown ||
+        key == LogicalKeyboardKey.pageUp) {
       final rows = (_vertical.viewportExtent / _rowHeight).floor();
-      _move(key == LogicalKeyboardKey.pageDown ? rows : -rows, 0, extend: shift);
+      _move(
+        key == LogicalKeyboardKey.pageDown ? rows : -rows,
+        0,
+        extend: shift,
+      );
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.home || key == LogicalKeyboardKey.end) {
-      final target =
-          key == LogicalKeyboardKey.home ? 0 : _controller.rowCount - 1;
+      final target = key == LogicalKeyboardKey.home
+          ? 0
+          : _controller.rowCount - 1;
       final current = _controller.selection.activeCell?.row ?? 0;
       _move(target - current, 0, extend: shift);
       return KeyEventResult.handled;
@@ -265,8 +270,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     );
     // Committing first means clicking away from an open editor saves the edit
     // rather than silently discarding what was typed.
-    if (_controller.editSession != null &&
-        !_controller.isEditing(cell)) {
+    if (_controller.editSession != null && !_controller.isEditing(cell)) {
       _controller.commitEdit();
     }
     _controller.selectCell(cell, modifiers);
@@ -320,9 +324,9 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     required GridLayout<T> layout,
     required LatticeGridTheme theme,
     required Widget Function(List<ColumnLayout<T>> columns, bool isFirstPane)
-        paneBuilder,
+    paneBuilder,
     required Widget Function(List<ColumnLayout<T>> columns, bool isFirstPane)
-        scrollingBuilder,
+    scrollingBuilder,
     required ScrollController horizontal,
   }) {
     final hasLeading = layout.leading.isNotEmpty;
@@ -548,8 +552,8 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     final background = isSelected
         ? theme.selectedRowBackground
         : isHovered
-            ? theme.hoveredRowBackground
-            : theme.backgroundForRow(index);
+        ? theme.hoveredRowBackground
+        : theme.backgroundForRow(index);
 
     return MouseRegion(
       onEnter: (_) => _setHovered(index),

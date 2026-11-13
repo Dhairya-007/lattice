@@ -57,10 +57,14 @@ class LatticeGroupRowCells<T> extends StatelessWidget {
               alignment: isHeaderCell
                   ? Alignment.centerLeft
                   : (laid.column.effectiveAlign == ColumnAlign.end
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft),
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft),
               child: isHeaderCell
-                  ? _GroupLabel<T>(controller: controller, row: row, theme: theme)
+                  ? _GroupLabel<T>(
+                      controller: controller,
+                      row: row,
+                      theme: theme,
+                    )
                   : Text(
                       _aggregateText(laid.column.field) ?? '',
                       style: theme.footerTextStyle,

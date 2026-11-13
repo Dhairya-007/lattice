@@ -83,14 +83,20 @@ class LatticeGridTheme {
       frozenPaneLine: scheme.outlineVariant,
       focusedCellBorder: scheme.primary,
       errorColor: scheme.error,
-      headerTextStyle: (text.labelLarge ?? const TextStyle())
-          .copyWith(fontWeight: FontWeight.w600, color: scheme.onSurface),
-      cellTextStyle:
-          (text.bodyMedium ?? const TextStyle()).copyWith(color: scheme.onSurface),
-      groupTextStyle: (text.bodyMedium ?? const TextStyle())
-          .copyWith(fontWeight: FontWeight.w600, color: scheme.onSurface),
-      footerTextStyle: (text.bodySmall ?? const TextStyle())
-          .copyWith(color: scheme.onSurfaceVariant),
+      headerTextStyle: (text.labelLarge ?? const TextStyle()).copyWith(
+        fontWeight: FontWeight.w600,
+        color: scheme.onSurface,
+      ),
+      cellTextStyle: (text.bodyMedium ?? const TextStyle()).copyWith(
+        color: scheme.onSurface,
+      ),
+      groupTextStyle: (text.bodyMedium ?? const TextStyle()).copyWith(
+        fontWeight: FontWeight.w600,
+        color: scheme.onSurface,
+      ),
+      footerTextStyle: (text.bodySmall ?? const TextStyle()).copyWith(
+        color: scheme.onSurfaceVariant,
+      ),
     );
   }
 

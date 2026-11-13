@@ -45,7 +45,10 @@ class LatticeHeaderCell<T> extends StatelessWidget {
     );
 
     final children = <Widget>[
-      if (column.effectiveAlign == ColumnAlign.end) const Spacer() else Flexible(child: label),
+      if (column.effectiveAlign == ColumnAlign.end)
+        const Spacer()
+      else
+        Flexible(child: label),
       if (column.effectiveAlign == ColumnAlign.end) Flexible(child: label),
       if (sort != null) ...[
         const SizedBox(width: 4),
@@ -256,8 +259,10 @@ class _LatticeFilterCellState<T> extends State<LatticeFilterCell<T>> {
                     isDense: true,
                     hintText: 'Filter',
                     hintStyle: theme.footerTextStyle,
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
                     border: const OutlineInputBorder(),
                     suffixIcon: _text.text.isEmpty
                         ? null
