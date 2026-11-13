@@ -1,17 +1,50 @@
 # Changelog
 
-## 0.1.1
+## 0.2.0
 
-Documentation and metadata only — no change to the library.
+New API, nothing removed or renamed.
 
-- **Corrected the 0.1.0 entry.** It listed the export hardening and the
-  conditional formatting API under "Unreleased", when both in fact shipped in
-  0.1.0. Anyone reading the package page would have concluded the CSV
-  formula-injection fix was still pending. The entry below now says what
-  0.1.0 actually contains.
-- Added `homepage` to the pubspec, and a `dart doc` check to CI so a broken
+### Stacked headers
+
+Header rows that span several columns, for grids where columns belong
+together — four quarters, a street/city/postcode address.
+
+- `HeaderBand` names the **fields** it covers rather than a column range, so
+  it follows a reorder, narrows when a column is hidden, and splits correctly
+  across a frozen pane.
+- `layoutHeaderRow` resolves a row against one pane's columns, handling bands
+  split across panes, bands interrupted by a moved column, and columns no
+  band covers.
+- `describeHeaderProblems` reports unknown fields, doubly-covered columns and
+  empty bands; `GridController.stackedHeaders` runs it in an assertion, so a
+  typo is loud in development and harmless in production.
+
+### Frozen rows
+
+`frozenRowCount` and `frozenRowCountBottom` pin rows to the top and bottom.
+
+Pinning is by **position, not identity**: sort the grid and the pinned rows
+are whatever now sorts first, which is what "frozen" should mean. The two
+bands together are capped at one row fewer than the grid holds, so freezing
+can never leave nothing to scroll — `effectiveFrozenTop` and
+`effectiveFrozenBottom` report what you actually got.
+
+### Selection coverage
+
+`SelectionCoverage` (none / some / all) behind a tri-state select-all,
+`toggleSelectAll`, and `setRowSelected` for toggling one row without
+replacing the selection the way a click does. Coverage counts only rows that
+still exist, so indices stranded by a filter cannot make a partial selection
+look complete.
+
+### Also
+
+- `homepage` in the pubspec, and a `dart doc` check in CI so a broken
   reference in a doc comment fails the build rather than quietly degrading
   the published API documentation.
+- Corrects the 0.1.0 entry below, which filed the export hardening and the
+  conditional formatting API under "Unreleased" when both in fact shipped in
+  0.1.0. A published archive is immutable, so the correction appears here.
 
 ## 0.1.0
 
