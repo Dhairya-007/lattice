@@ -47,6 +47,7 @@ class LatticeGridTheme {
     this.stackedHeaderBackground,
     this.frozenRowBackground,
     this.frozenRowDividerWidth = 1.5,
+    this.checkboxColumnWidth = 48,
     this.filterRowHeight = 40,
     this.footerHeight = 48,
     this.cellPadding = const EdgeInsets.symmetric(horizontal: 12),
@@ -213,6 +214,9 @@ class LatticeGridTheme {
 
   /// Thickness of the line between a frozen band and the scrolling rows.
   final double frozenRowDividerWidth;
+
+  /// Width of the selection checkbox column.
+  final double checkboxColumnWidth;
   final double filterRowHeight;
   final double footerHeight;
   final EdgeInsets cellPadding;
@@ -290,6 +294,7 @@ class LatticeGridTheme {
     Color? stackedHeaderBackground,
     Color? frozenRowBackground,
     double? frozenRowDividerWidth,
+    double? checkboxColumnWidth,
     double? filterRowHeight,
     double? footerHeight,
     EdgeInsets? cellPadding,
@@ -333,6 +338,7 @@ class LatticeGridTheme {
       frozenRowBackground: frozenRowBackground ?? this.frozenRowBackground,
       frozenRowDividerWidth:
           frozenRowDividerWidth ?? this.frozenRowDividerWidth,
+      checkboxColumnWidth: checkboxColumnWidth ?? this.checkboxColumnWidth,
       filterRowHeight: filterRowHeight ?? this.filterRowHeight,
       footerHeight: footerHeight ?? this.footerHeight,
       cellPadding: cellPadding ?? this.cellPadding,

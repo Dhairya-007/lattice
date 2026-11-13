@@ -499,6 +499,33 @@ class GridController<T> with GridChangeNotifier {
     notifyListeners();
   }
 
+  /// How much of the grid is selected, for a select-all checkbox.
+  SelectionCoverage get selectionCoverage =>
+      selection.coverageOf(_visibleRows.length);
+
+  /// What a header checkbox should do when tapped.
+  ///
+  /// Anything short of everything selects the rest; a full selection clears.
+  /// That is the behaviour of every spreadsheet and mail client, and it means
+  /// the control never needs a separate "deselect all".
+  void toggleSelectAll() {
+    if (selectionCoverage == SelectionCoverage.all) {
+      clearSelection();
+    } else {
+      selectAllRows();
+    }
+  }
+
+  /// Selects or deselects one row, leaving the rest alone.
+  ///
+  /// What a row checkbox does, as distinct from a click on the row, which
+  /// replaces the selection.
+  void setRowSelected(int index, bool selected) {
+    if (selection.isRowSelected(index) == selected) return;
+    selection.selectRow(index, SelectionModifiers.toggling);
+    notifyListeners();
+  }
+
   void clearSelection() {
     selection.clear();
     notifyListeners();
