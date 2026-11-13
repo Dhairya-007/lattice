@@ -1,6 +1,8 @@
 /// Column definition and supporting value types.
 library;
 
+import 'decoration.dart';
+
 /// Horizontal alignment of a cell's content.
 enum ColumnAlign { start, center, end }
 
@@ -55,6 +57,7 @@ class GridColumn<T> {
     this.setValue,
     this.validator,
     this.tooltip,
+    this.rule,
   })  : title = title ?? _humanize(field),
         value = value ?? _mapGetter<T>(field),
         assert(minWidth <= maxWidth, 'minWidth must not exceed maxWidth'),
@@ -113,6 +116,12 @@ class GridColumn<T> {
   /// Long-form description for a header tooltip.
   final String? tooltip;
 
+  /// Conditional formatting for this column's cells.
+  ///
+  /// Evaluated per visible cell against the column's [ColumnStats], so it
+  /// costs nothing for rows that are not on screen.
+  final CellRule? rule;
+
   /// Whether the user may edit cells in this column.
   bool get editable => setValue != null;
 
@@ -151,6 +160,7 @@ class GridColumn<T> {
     ValueSetter<T>? setValue,
     ValueValidator? validator,
     String? tooltip,
+    CellRule? rule,
   }) {
     return GridColumn<T>(
       field: field ?? this.field,
@@ -172,6 +182,7 @@ class GridColumn<T> {
       setValue: setValue ?? this.setValue,
       validator: validator ?? this.validator,
       tooltip: tooltip ?? this.tooltip,
+      rule: rule ?? this.rule,
     );
   }
 

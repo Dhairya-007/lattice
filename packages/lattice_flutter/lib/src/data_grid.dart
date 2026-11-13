@@ -43,6 +43,9 @@ class LatticeDataGrid<T> extends StatefulWidget {
     this.pageSizes = const [25, 50, 100, 250],
     this.autofocus = false,
     this.editOnDoubleTap = true,
+    this.stickyGroupHeaders = true,
+    this.highlightChanges = false,
+    this.rowId,
     super.key,
   });
 
@@ -88,6 +91,21 @@ class LatticeDataGrid<T> extends StatefulWidget {
 
   /// Whether a double tap opens the editor on an editable cell.
   final bool editOnDoubleTap;
+
+  /// Pins the current group's header to the top of the viewport while
+  /// scrolling inside that group, so it is always clear which group the rows
+  /// on screen belong to.
+  final bool stickyGroupHeaders;
+
+  /// Flashes a cell when its value changes, for live data.
+  ///
+  /// Requires [rowId]: without a stable identity, a row scrolling into a
+  /// position cannot be told from a value changing, and the grid would
+  /// flash on every scroll.
+  final bool highlightChanges;
+
+  /// A stable identity for a row, used by [highlightChanges].
+  final Object Function(T row)? rowId;
 
   @override
   State<LatticeDataGrid<T>> createState() => _LatticeDataGridState<T>();
@@ -479,7 +497,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
           Center(child: Text('No rows', style: theme.footerTextStyle));
     }
 
-    return Scrollbar(
+    final body = Scrollbar(
       controller: _vScrolling,
       child: _buildPanes(
         layout: layout,
@@ -502,6 +520,86 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
           theme: theme,
           scrollController: _vScrolling,
           physics: const ClampingScrollPhysics(),
+        ),
+      ),
+    );
+
+    if (!widget.stickyGroupHeaders || !_controller.isGrouped) return body;
+    return Stack(
+      children: [
+        body,
+        // Rebuilt on scroll on its own, so pinning a header costs one small
+        // widget per frame rather than a rebuild of the grid.
+        Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          child: AnimatedBuilder(
+            animation: _vScrolling,
+            builder: (context, _) => _buildStickyGroupHeader(layout, theme),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// The group header for whichever group the first visible row belongs to.
+  ///
+  /// Only drawn once the real header has scrolled out of view, so it never
+  /// doubles the one already on screen.
+  Widget _buildStickyGroupHeader(GridLayout<T> layout, LatticeGridTheme theme) {
+    if (!_vScrolling.hasClients || widget.rowHeightBuilder != null) {
+      return const SizedBox.shrink();
+    }
+    final offset = _vScrolling.offset;
+    if (offset <= 0) return const SizedBox.shrink();
+
+    final first = (offset / _rowHeight).floor();
+    GroupGridRow<T>? current;
+    for (var i = first; i >= 0; i--) {
+      final row = _controller.rowAt(i);
+      if (row is GroupGridRow<T>) {
+        // A header that is itself still on screen needs no copy.
+        if (i == first && offset - i * _rowHeight < 1) {
+          return const SizedBox.shrink();
+        }
+        current = row;
+        break;
+      }
+    }
+    if (current == null) return const SizedBox.shrink();
+
+    return Material(
+      elevation: 2,
+      color: theme.groupRowBackground,
+      child: SizedBox(
+        height: _rowHeight,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (layout.leading.isNotEmpty)
+              SizedBox(
+                width: layout.leadingWidth,
+                child: LatticeGroupRowCells<T>(
+                  controller: _controller,
+                  row: current,
+                  columns: layout.leading,
+                  theme: theme,
+                  isFirstPane: true,
+                ),
+              ),
+            Expanded(
+              child: ClipRect(
+                child: LatticeGroupRowCells<T>(
+                  controller: _controller,
+                  row: current,
+                  columns: layout.scrolling,
+                  theme: theme,
+                  isFirstPane: layout.leading.isEmpty,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -617,6 +715,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     required bool isLastInPane,
   }) {
     final address = CellAddress(index, laid.column.field);
+    final rowId = widget.rowId?.call(row.data);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       // Tap-down rather than tap: see _isDoubleTap.
@@ -633,6 +732,12 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
         theme: theme,
         cellBuilder: widget.cellBuilder,
         isLastInPane: isLastInPane,
+        // Evaluated per visible cell: the rule is a pure function of the
+        // value and the column's cached statistics, so this is a handful of
+        // comparisons, not a scan.
+        decoration: _controller.decorationFor(laid.column.field, row.data),
+        highlightChanges: widget.highlightChanges,
+        rowId: rowId,
       ),
     );
   }

@@ -12,6 +12,7 @@ export 'src/column.dart';
 export 'src/compare.dart';
 export 'src/controller.dart';
 export 'src/data_source.dart';
+export 'src/decoration.dart';
 export 'src/editing.dart';
 export 'src/export.dart';
 export 'src/filter.dart';

@@ -4,6 +4,7 @@ library;
 import 'aggregate.dart';
 import 'column.dart';
 import 'data_source.dart';
+import 'decoration.dart';
 import 'editing.dart';
 import 'export.dart';
 import 'filter.dart';
@@ -494,6 +495,24 @@ class GridController<T> with GridChangeNotifier {
     } else {
       selectCell(next);
     }
+  }
+
+  // -- Conditional formatting -----------------------------------------------
+
+  /// Range of the values currently shown in [field].
+  ColumnStats statsFor(String field) => _dataSource.statsFor(field);
+
+  /// How the cell at [field] in [row] should be emphasised.
+  ///
+  /// Returns [CellDecoration.none] when the column has no rule, so an adapter
+  /// can call this for every visible cell without a null check and without
+  /// paying for columns that are not formatted.
+  CellDecoration decorationFor(String field, T row) {
+    final column = this.column(field);
+    final rule = column?.rule;
+    if (column == null || rule == null) return CellDecoration.none;
+    return rule.decorate(column.value(row), statsFor(field)) ??
+        CellDecoration.none;
   }
 
   // -- Editing --------------------------------------------------------------
