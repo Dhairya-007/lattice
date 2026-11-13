@@ -121,6 +121,10 @@ class LatticeHeaderCell<T> extends StatelessWidget {
     }
 
     if (allowReorder) {
+      // Captured before the wrapping below: a closure captures the variable,
+      // not its value, so a builder that read `content` would read the
+      // wrapper it is inside and recurse forever.
+      final inner = content;
       // The payload is the field, so a drop only needs to know where it
       // landed; the controller works out the new order.
       content = DragTarget<String>(
@@ -140,17 +144,18 @@ class LatticeHeaderCell<T> extends StatelessWidget {
                 ),
               ),
             ),
-            child: content,
+            child: inner,
           );
         },
       );
+      final draggableChild = content;
       content = Draggable<String>(
         data: column.field,
         axis: Axis.horizontal,
         dragAnchorStrategy: pointerDragAnchorStrategy,
         feedback: _DragGhost(title: column.title, theme: theme),
-        childWhenDragging: Opacity(opacity: 0.35, child: content),
-        child: content,
+        childWhenDragging: Opacity(opacity: 0.35, child: draggableChild),
+        child: draggableChild,
       );
     }
 
