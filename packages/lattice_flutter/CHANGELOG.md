@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Conditional formatting rendered from the engine's rules: data bars drawn
+  behind the value so they cost it no room, tone-coloured text, and tinted
+  backgrounds whose strength follows the rule's intensity.
+- `GridDensity.compact`, `.standard` and `.comfortable`, adjusting row,
+  header and filter heights and cell padding together.
+- Sticky group headers: the group you are scrolled inside stays named at the
+  top of the viewport. Rebuilds against the scroll controller alone, so
+  pinning costs one small widget per frame rather than a grid rebuild.
+- `highlightChanges` flashes a cell when its value changes, for live data. It
+  requires `rowId`: without a stable identity a row scrolling into a slot
+  cannot be told from a value changing.
+- Selection now happens on tap-down. A `GestureDetector` carrying both
+  `onTap` and `onDoubleTap` cannot report the single tap until the
+  double-tap window closes, which made every click feel late.
+- Fixed: a page size not present in `pageSizes` replaced the footer with an
+  error widget.
+
 ## 0.1.0
 
 First release of the Flutter adapter.
