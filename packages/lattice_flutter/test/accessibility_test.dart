@@ -80,11 +80,12 @@ void main() {
   ) async {
     final handle = tester.ensureSemantics();
     await tester.pumpWidget(host(LatticeDataGrid<Product>(controller: make())));
-    final node = nodeFor(tester, find.text('Price'));
-    expect(node.hasFlag(SemanticsFlag.isHeader), isTrue);
-    expect(node.hasFlag(SemanticsFlag.isButton), isTrue);
-    // getSemanticsData exposes the actions; SemanticsNode has no hasAction.
-    expect(node.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+    // containsSemantics checks only what it is given, and avoids the
+    // deprecated flag accessors.
+    expect(
+      nodeFor(tester, find.text('Price')),
+      containsSemantics(isHeader: true, isButton: true, hasTapAction: true),
+    );
     handle.dispose();
   });
 
@@ -136,9 +137,10 @@ void main() {
 
     await tester.enterText(find.byType(TextField), '');
     await tester.pumpAndSettle();
-    final withError = tester.getSemantics(find.byType(TextField));
-    expect(withError.value, 'Required');
-    expect(withError.hasFlag(SemanticsFlag.isLiveRegion), isTrue);
+    expect(
+      tester.getSemantics(find.byType(TextField)),
+      containsSemantics(value: 'Required', isLiveRegion: true),
+    );
     handle.dispose();
   });
 

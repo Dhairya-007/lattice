@@ -257,22 +257,9 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
     super.dispose();
   }
 
-  String? _announcedError;
-
   void _commit() {
     widget.controller.updateEdit(coerceValue(_text.text, widget.column.type));
-    final result = widget.controller.commitEdit();
-    // A rejected edit keeps the editor open with a red border, which says
-    // nothing to a screen reader; the message has to be announced.
-    if (result.isRejected && result.error != null) {
-      _announce(result.error!);
-    }
-  }
-
-  void _announce(String message) {
-    if (_announcedError == message) return;
-    _announcedError = message;
-    SemanticsService.announce(message, Directionality.of(context));
+    widget.controller.commitEdit();
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -293,21 +280,14 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
   Widget build(BuildContext context) {
     final error = widget.controller.editSession?.error;
     final theme = widget.theme;
-    if (error != null) {
-      // Also announce an error that appeared while typing, not only on a
-      // rejected commit.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _announce(error);
-      });
-    } else {
-      _announcedError = null;
-    }
-
     return Focus(
       onKeyEvent: _onKey,
       child: Semantics(
         label: '${widget.column.title} editor',
         textField: true,
+        // A live region is announced when its value changes, which covers
+        // the error appearing without reaching for SemanticsService - whose
+        // announce is deprecated for being single-window.
         liveRegion: error != null,
         value: error ?? _text.text,
         child: Tooltip(
