@@ -142,8 +142,9 @@ void main() {
     });
 
     testWidgets('respects an explicit theme', (tester) async {
-      final theme = LatticeGridTheme.fromTheme(ThemeData.light())
-          .copyWith(rowHeight: 72, headerHeight: 80);
+      final theme = LatticeGridTheme.fromTheme(
+        ThemeData.light(),
+      ).copyWith(rowHeight: 72, headerHeight: 80);
       await tester.pumpWidget(
         host(
           LatticeDataGrid<Product>(controller: makeController(), theme: theme),
