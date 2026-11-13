@@ -122,7 +122,15 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
   late final ScrollController _vScrolling;
   late final ScrollController _vTrailing;
   late final ScrollController _hHeader;
+  late final ScrollController _hFilter;
   late final ScrollController _hBody;
+
+  /// One per stacked header row, created on demand.
+  ///
+  /// A `ScrollController` cannot be attached to more than one scroll view, so
+  /// every horizontally scrolling row - each stacked header, the column
+  /// titles, the filter row, the body - needs its own, joined by the group.
+  final List<ScrollController> _hStacked = [];
 
   final FocusNode _focus = FocusNode(debugLabel: 'LatticeDataGrid');
 
@@ -139,6 +147,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     _vTrailing = _vertical.addAndGet();
     _horizontal = SyncedScrollGroup();
     _hHeader = _horizontal.addAndGet();
+    _hFilter = _horizontal.addAndGet();
     _hBody = _horizontal.addAndGet();
     widget.controller.addListener(_onControllerChanged);
   }
@@ -344,8 +353,13 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (widget.showHeader)
-                for (final row in _controller.stackedHeaders)
-                  _buildStackedHeaderRow(row, layout, theme),
+                for (var i = 0; i < _controller.stackedHeaders.length; i++)
+                  _buildStackedHeaderRow(
+                    _controller.stackedHeaders[i],
+                    i,
+                    layout,
+                    theme,
+                  ),
               if (widget.showHeader) _buildHeader(layout, theme),
               if (widget.showFilterRow) _buildFilterRow(layout, theme),
               Expanded(child: _buildBody(layout, theme)),
@@ -410,6 +424,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
   /// column titles below it.
   Widget _buildStackedHeaderRow(
     HeaderRow row,
+    int index,
     GridLayout<T> layout,
     LatticeGridTheme theme,
   ) {
@@ -437,7 +452,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
       child: _buildPanes(
         layout: layout,
         theme: theme,
-        horizontal: _hHeader,
+        horizontal: _stackedController(index),
         paneBuilder: cells,
         scrollingBuilder: cells,
       ),
@@ -478,6 +493,13 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     );
   }
 
+  ScrollController _stackedController(int index) {
+    while (_hStacked.length <= index) {
+      _hStacked.add(_horizontal.addAndGet());
+    }
+    return _hStacked[index];
+  }
+
   Widget _buildFilterRow(GridLayout<T> layout, LatticeGridTheme theme) {
     Widget cells(List<ColumnLayout<T>> columns, bool isFirstPane) {
       return Row(
@@ -508,7 +530,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
       child: _buildPanes(
         layout: layout,
         theme: theme,
-        horizontal: _hHeader,
+        horizontal: _hFilter,
         paneBuilder: cells,
         scrollingBuilder: cells,
       ),
