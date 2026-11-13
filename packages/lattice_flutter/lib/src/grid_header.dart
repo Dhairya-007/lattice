@@ -45,11 +45,17 @@ class LatticeHeaderCell<T> extends StatelessWidget {
     final priority = controller.sortPriority(column.field);
     final showPriority = priority != null && controller.sorts.length > 1;
 
-    final label = Text(
-      column.title,
-      style: theme.headerTextStyle,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
+    // The title and the level badge are both spoken by the Semantics
+    // wrapper below, so neither is left in the tree: a Text owns the
+    // nearest node, and the header's own label and flags would never reach
+    // a screen reader.
+    final label = ExcludeSemantics(
+      child: Text(
+        column.title,
+        style: theme.headerTextStyle,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
     );
 
     final children = <Widget>[
@@ -82,12 +88,14 @@ class LatticeHeaderCell<T> extends StatelessWidget {
               color: theme.focusedCellBorder.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(999),
             ),
-            child: Text(
-              '$priority',
-              style: theme.headerTextStyle.copyWith(
-                fontSize: 9,
-                height: 1,
-                color: theme.focusedCellBorder,
+            child: ExcludeSemantics(
+              child: Text(
+                '$priority',
+                style: theme.headerTextStyle.copyWith(
+                  fontSize: 9,
+                  height: 1,
+                  color: theme.focusedCellBorder,
+                ),
               ),
             ),
           ),
@@ -111,6 +119,10 @@ class LatticeHeaderCell<T> extends StatelessWidget {
     if (column.sortable) {
       content = GestureDetector(
         behavior: HitTestBehavior.opaque,
+        // The wrapper below carries the tap: left to annotate itself, the
+        // detector would put a bare node between the header's node and the
+        // title, and that is the node a screen reader would land on.
+        excludeFromSemantics: true,
         onTap: _onTap,
         child: MouseRegion(cursor: SystemMouseCursors.click, child: content),
       );
