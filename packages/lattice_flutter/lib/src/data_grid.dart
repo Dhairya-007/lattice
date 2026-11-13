@@ -943,18 +943,32 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
 
     final decoration = BoxDecoration(
       color: background,
-      border: Border(
-        // An accent down the leading edge: a tint alone is easy to miss on
-        // a striped background, and this reads at a glance.
-        left: BorderSide(
-          color: isSelected ? theme.focusedCellBorder : const Color(0x00000000),
-          width: theme.selectionAccentWidth,
-        ),
-        bottom: theme.showHorizontalGridLines
-            ? BorderSide(color: theme.gridLine, width: theme.gridLineWidth)
-            : BorderSide.none,
-      ),
+      border: theme.showHorizontalGridLines
+          ? Border(
+              bottom: BorderSide(
+                color: theme.gridLine,
+                width: theme.gridLineWidth,
+              ),
+            )
+          : null,
     );
+
+    // An accent down the leading edge: a tint alone is easy to miss against
+    // striped rows. It goes in the foreground so it paints over the row
+    // instead of taking width from it, and only in the first pane, so a
+    // frozen column does not produce a second bar mid-row.
+    final accent = isFirstPane && theme.selectionAccentWidth > 0
+        ? BoxDecoration(
+            border: Border(
+              left: BorderSide(
+                color: isSelected
+                    ? theme.focusedCellBorder
+                    : const Color(0x00000000),
+                width: theme.selectionAccentWidth,
+              ),
+            ),
+          )
+        : null;
 
     return MouseRegion(
       onEnter: (_) => _setHovered(index),
@@ -966,6 +980,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
         curve: Curves.easeOut,
         height: height,
         decoration: decoration,
+        foregroundDecoration: accent,
         child: Row(
           children: [
             for (var i = 0; i < columns.length; i++)
