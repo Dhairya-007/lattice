@@ -20,9 +20,9 @@ GridController<Product> ruled({
   );
 }
 
-/// The text widget showing [value] inside a cell.
+/// The first text widget showing [value] inside a cell.
 Text textFor(WidgetTester tester, String value) =>
-    tester.widget<Text>(find.text(value));
+    tester.widget<Text>(find.text(value).first);
 
 void main() {
   group('conditional formatting', () {
@@ -108,8 +108,8 @@ void main() {
   });
 
   group('density', () {
-    testWidgets('compact fits more rows than comfortable', (tester) async {
-      Future<int> rowsVisible(GridDensity density) async {
+    testWidgets('compact draws rows closer together', (tester) async {
+      Future<double> rowPitch(GridDensity density) async {
         await tester.pumpWidget(
           host(
             LatticeDataGrid<Product>(
@@ -124,14 +124,17 @@ void main() {
               ),
             ),
           ),
-          duration: Duration.zero,
         );
-        return tester.widgetList(find.byType(LatticeCell<Product>)).length;
+        final first = tester.getRect(find.text('Row 0').first);
+        final second = tester.getRect(find.text('Row 1').first);
+        return second.top - first.top;
       }
 
-      final compact = await rowsVisible(GridDensity.compact);
-      final comfortable = await rowsVisible(GridDensity.comfortable);
-      expect(compact, greaterThan(comfortable));
+      final compact = await rowPitch(GridDensity.compact);
+      final comfortable = await rowPitch(GridDensity.comfortable);
+      expect(compact, lessThan(comfortable));
+      expect(compact, 30);
+      expect(comfortable, 52);
     });
 
     testWidgets('density changes the row height', (tester) async {

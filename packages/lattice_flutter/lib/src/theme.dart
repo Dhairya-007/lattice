@@ -123,6 +123,45 @@ class LatticeGridTheme {
       footerTextStyle: (text.bodySmall ?? const TextStyle()).copyWith(
         color: scheme.onSurfaceVariant,
       ),
+      // Semantic tones, so a rule written once reads correctly in both
+      // brightnesses. Lightened in the dark theme, where a saturated colour
+      // on a dark surface reads louder than the same colour does on white.
+      tones: {
+        CellTone.neutral: scheme.onSurfaceVariant,
+        CellTone.info: isDark
+            ? const Color(0xFF74A9F8)
+            : const Color(0xFF1C6FD6),
+        CellTone.positive: isDark
+            ? const Color(0xFF69C98D)
+            : const Color(0xFF17864A),
+        CellTone.caution: isDark
+            ? const Color(0xFFE5A94E)
+            : const Color(0xFFB36A00),
+        CellTone.severe: isDark
+            ? const Color(0xFFF08A8A)
+            : const Color(0xFFC4322F),
+      },
+      changeFlashColor: scheme.tertiary,
+      rowHeight: switch (density) {
+        GridDensity.compact => 30,
+        GridDensity.standard => 40,
+        GridDensity.comfortable => 52,
+      },
+      headerHeight: switch (density) {
+        GridDensity.compact => 34,
+        GridDensity.standard => 44,
+        GridDensity.comfortable => 56,
+      },
+      filterRowHeight: switch (density) {
+        GridDensity.compact => 34,
+        GridDensity.standard => 40,
+        GridDensity.comfortable => 46,
+      },
+      cellPadding: switch (density) {
+        GridDensity.compact => const EdgeInsets.symmetric(horizontal: 8),
+        GridDensity.standard => const EdgeInsets.symmetric(horizontal: 12),
+        GridDensity.comfortable => const EdgeInsets.symmetric(horizontal: 16),
+      },
     );
   }
 
