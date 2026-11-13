@@ -20,7 +20,7 @@ jobs:
     name: OSV scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Both SDKs, because OSV matches advisories against resolved versions
       # and the lockfiles are deliberately not committed for a library.
@@ -52,7 +52,7 @@ jobs:
     name: Engine stays dependency-free
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # lattice_core is pure computation on purpose: no network, no
       # filesystem, no environment, no runtime dependencies. That is what

@@ -18,7 +18,7 @@ jobs:
       run:
         working-directory: packages/lattice_core
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dart-lang/setup-dart@v1
         with:
@@ -47,7 +47,7 @@ jobs:
     name: lattice_flutter (widgets)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The adapter lands in a later PR. Until its pubspec exists the rest of
       # this job is skipped, so the first PRs are not blocked by a package
