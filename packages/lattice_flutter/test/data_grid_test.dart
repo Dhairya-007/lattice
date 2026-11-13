@@ -343,7 +343,11 @@ void main() {
       );
       final cell = find.text('Keyboard');
       await tester.tap(cell);
-      await tester.pump(const Duration(milliseconds: 600));
+      // The double-tap window is measured against the wall clock, which
+      // tester.pump does not advance, so this delay has to be a real one.
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 400)),
+      );
       await tester.tap(cell);
       await tester.pumpAndSettle();
       expect(find.byType(TextField), findsNothing);
