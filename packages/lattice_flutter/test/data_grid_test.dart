@@ -176,12 +176,17 @@ void main() {
       await tester.tap(find.text('Price'));
       await tester.pump();
       expect(controller.sorts.single.isAscending, isFalse);
-      expect(find.byIcon(Icons.arrow_downward), findsOneWidget);
+      // One arrow that turns over, rather than two icons swapping.
+      final flipped = tester.widget<AnimatedRotation>(
+        find.byType(AnimatedRotation),
+      );
+      expect(flipped.turns, 0.5);
 
       await tester.tap(find.text('Price'));
       await tester.pump();
       expect(controller.sorts, isEmpty);
       expect(find.byIcon(Icons.arrow_upward), findsNothing);
+      expect(find.byType(AnimatedRotation), findsNothing);
     });
 
     testWidgets('an unsortable header does not react', (tester) async {
