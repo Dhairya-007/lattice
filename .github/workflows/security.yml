@@ -1,0 +1,77 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so a newly disclosed advisory in a pinned dependency surfaces
+    # without waiting for the next pull request.
+    - cron: '17 6 * * 1'
+
+# CodeQL has no Dart analyzer, so the useful checks here are supply chain ones
+# plus the Dart analyzer itself, which already fails on info-level lints.
+permissions:
+  contents: read
+
+jobs:
+  osv-scan:
+    name: OSV scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      # OSV matches advisories against resolved versions, so the lockfiles
+      # have to exist: they are deliberately not committed for a library.
+      - name: Resolve dependencies
+        run: |
+          (cd packages/lattice_core && dart pub get)
+          (cd packages/lattice_flutter && dart pub get) || true
+
+      - uses: google/osv-scanner-action/osv-scanner-action@v2
+        with:
+          scan-args: |-
+            --recursive
+            --skip-git
+            ./
+
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure
+
+  engine-purity:
+    name: Engine stays dependency-free
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # lattice_core is pure computation on purpose: no network, no
+      # filesystem, no environment, no runtime dependencies. That is what
+      # keeps it auditable, so it is enforced rather than documented.
+      - name: Reject runtime dependencies in lattice_core
+        run: |
+          if grep -qE '^dependencies:' packages/lattice_core/pubspec.yaml; then
+            echo 'lattice_core must have no runtime dependencies.'
+            echo 'See SECURITY.md. dev_dependencies are fine.'
+            exit 1
+          fi
+
+      - name: Reject dart:io and dart:html in lattice_core
+        run: |
+          if grep -rnE "import 'dart:(io|html|ffi)'" packages/lattice_core/lib; then
+            echo 'lattice_core must not touch the filesystem, network or FFI.'
+            exit 1
+          fi
+          echo 'Engine is clean.'
