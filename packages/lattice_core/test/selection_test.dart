@@ -213,12 +213,12 @@ void main() {
   test('CellAddress equality is by row and field', () {
     expect(const CellAddress(1, 'name'), const CellAddress(1, 'name'));
     expect(const CellAddress(1, 'name'), isNot(const CellAddress(2, 'name')));
-    // Deliberately equal: the point is that equal addresses collapse in a set.
-    // ignore: equal_elements_in_set
-    final deduped = {
-      const CellAddress(1, 'name'),
-      const CellAddress(1, 'name')
-    };
+    // Equal addresses must collapse in a set, which is what makes a
+    // selection safe to hold in one. Built by hand so the analyzer does not
+    // read it as a mistaken duplicate literal.
+    final deduped = <CellAddress>{}
+      ..add(const CellAddress(1, 'name'))
+      ..add(const CellAddress(1, 'name'));
     expect(deduped.length, 1);
   });
 }
