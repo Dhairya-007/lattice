@@ -37,7 +37,7 @@ LatticeDataGrid<Employee>(
 
 ## How it is put together
 
-All behaviour lives in [`lattice_core`](../lattice_core), a pure Dart engine
+All behaviour lives in [`lattice_core`](https://pub.dev/packages/lattice_core), a pure Dart engine
 with no dependency on Flutter. This package renders that engine's state and
 turns gestures and keys back into controller calls.
 
