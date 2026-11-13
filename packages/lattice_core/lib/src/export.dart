@@ -67,10 +67,14 @@ class CsvExporter<T> {
     final out = StringBuffer();
     final exported = _exported;
     if (options.includeHeader) {
-      out.write(_line([for (final c in exported) c.title]));
+      _writeLine(out, [for (final c in exported) c.title]);
     }
+    final cells = List<String>.filled(exported.length, '');
     for (final row in rows) {
-      out.write(_line([for (final c in exported) _cell(c, row)]));
+      for (var i = 0; i < exported.length; i++) {
+        cells[i] = _cell(exported[i], row);
+      }
+      _writeLine(out, cells);
     }
     return out.toString();
   }
@@ -81,7 +85,7 @@ class CsvExporter<T> {
     final out = StringBuffer();
     final exported = _exported;
     if (options.includeHeader) {
-      out.write(_line([for (final c in exported) c.title]));
+      _writeLine(out, [for (final c in exported) c.title]);
     }
 
     void walk(List<GroupNode<T>> level) {
@@ -89,14 +93,14 @@ class CsvExporter<T> {
         if (options.includeGroupRows) {
           final label = '${options.groupIndent * node.depth}'
               '${node.label} (${node.rowCount})';
-          out.write(_line([label, ...List.filled(exported.length - 1, '')]));
+          _writeLine(out, [label, ...List.filled(exported.length - 1, '')]);
         }
         if (node.isLeafGroup) {
+          final indent = options.groupIndent * (node.depth + 1);
           for (final row in node.rows) {
-            out.write(_line([
-              for (final c in exported)
-                '${options.groupIndent * (node.depth + 1)}${_cell(c, row)}',
-            ]));
+            _writeLine(out, [
+              for (final c in exported) '$indent${_cell(c, row)}',
+            ]);
           }
         } else {
           walk(node.children);
@@ -121,19 +125,49 @@ class CsvExporter<T> {
     return raw == null ? '' : '$raw';
   }
 
-  String _line(List<String> cells) =>
-      '${cells.map(_escape).join(options.delimiter)}${options.lineEnding}';
+  /// Writes one escaped line into [out].
+  ///
+  /// Writing straight into the buffer avoids building an intermediate list of
+  /// escaped cells and then joining it, which at 50k rows was most of the
+  /// cost of an export.
+  void _writeLine(StringBuffer out, List<String> cells) {
+    for (var i = 0; i < cells.length; i++) {
+      if (i > 0) out.write(options.delimiter);
+      _writeEscaped(out, cells[i]);
+    }
+    out.write(options.lineEnding);
+  }
 
   /// RFC 4180 quoting: wrap in quotes when the value contains the delimiter, a
   /// quote or a newline, and double any embedded quotes.
-  String _escape(String value) {
-    final needsQuotes = value.contains(options.delimiter) ||
-        value.contains('"') ||
-        value.contains('\n') ||
-        value.contains('\r');
-    if (!needsQuotes) return value;
-    return '"${value.replaceAll('"', '""')}"';
+  void _writeEscaped(StringBuffer out, String value) {
+    var needsQuotes = false;
+    for (var i = 0; i < value.length; i++) {
+      final unit = value.codeUnitAt(i);
+      // " \n \r, or the first code unit of the delimiter.
+      if (unit == 0x22 || unit == 0x0a || unit == 0x0d) {
+        needsQuotes = true;
+        break;
+      }
+      if (unit == _delimiterUnit) {
+        needsQuotes = true;
+        break;
+      }
+    }
+    if (!needsQuotes) {
+      out.write(value);
+      return;
+    }
+    out.write('"');
+    out.write(value.replaceAll('"', '""'));
+    out.write('"');
   }
+
+  /// First code unit of the delimiter, for the scan above. Multi-character
+  /// delimiters are rare and still handled: a false positive only means a
+  /// value is quoted when it did not have to be, which readers accept.
+  int get _delimiterUnit =>
+      options.delimiter.isEmpty ? -1 : options.delimiter.codeUnitAt(0);
 }
 
 /// Serialises a cell range as tab-separated text, the format spreadsheets and
