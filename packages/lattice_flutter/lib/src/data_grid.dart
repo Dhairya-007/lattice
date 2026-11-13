@@ -45,6 +45,8 @@ class LatticeDataGrid<T> extends StatefulWidget {
     this.autofocus = false,
     this.editOnDoubleTap = true,
     this.showCheckboxColumn = false,
+    this.showColumnMenu = true,
+    this.allowColumnReorder = false,
     this.stickyGroupHeaders = true,
     this.highlightChanges = false,
     this.rowId,
@@ -100,6 +102,16 @@ class LatticeDataGrid<T> extends StatefulWidget {
   /// A checkbox is the only affordance that makes multi-selection
   /// obvious on touch, where ctrl-click does not exist.
   final bool showCheckboxColumn;
+
+  /// Shows a menu on each header: sort, pin, hide, reset width, and a
+  /// chooser for bringing hidden columns back.
+  final bool showColumnMenu;
+
+  /// Allows dragging a header onto another to reorder the columns.
+  ///
+  /// Off by default: a horizontal drag on a header already scrolls a grid
+  /// wider than its viewport, and only the app knows which it wants.
+  final bool allowColumnReorder;
 
   /// Pins the current group's header to the top of the viewport while
   /// scrolling inside that group, so it is always clear which group the rows
@@ -508,6 +520,8 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
               width: columns[i].width,
               theme: theme,
               isLastInPane: i == columns.length - 1,
+              showMenu: widget.showColumnMenu,
+              allowReorder: widget.allowColumnReorder,
             ),
         ],
       );
