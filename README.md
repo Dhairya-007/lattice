@@ -12,8 +12,8 @@
     <img alt="CI" src="https://github.com/Dhairya-007/lattice/actions/workflows/ci.yml/badge.svg"/>
   </a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/licence-MIT-blue.svg"/></a>
-  <img alt="Dart" src="https://img.shields.io/badge/Dart-3.5%2B-0175C2.svg"/>
-  <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.27%2B-02569B.svg"/>
+  <img alt="Dart" src="https://img.shields.io/badge/Dart-3.8%2B-0175C2.svg"/>
+  <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.47%2B-02569B.svg"/>
 </p>
 
 ---

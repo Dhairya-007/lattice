@@ -53,6 +53,24 @@ did not run.**
 CI runs all of the above on every pull request, including
 `dart analyze --fatal-infos`, so an `info`-level lint fails the build.
 
+## Two traps specific to this repository
+
+**Material lives in `package:material_ui`, not in the Flutter SDK.** Flutter
+3.47 moved it out and left `package:flutter/material.dart` as a deprecated
+shim, and CI runs `flutter analyze` with warnings fatal, so importing the shim
+fails the build. Gesture constants such as `kDoubleTapTimeout` are not
+re-exported by `material_ui`; import `package:flutter/gestures.dart` for those.
+
+**`dart format` output depends on the SDK version.** The formatter picks its
+style from the package's `environment: sdk:` constraint, and successive Dart
+releases break some constructs differently — a multi-line function type and a
+chained call are two of them. If your local Dart is older than the one the
+current Flutter stable bundles, the two formatters will undo each other's
+work. When that happens, do not fight it: rewrite the construct in a form
+neither version wants to change (usually by making it fit on one line, or by
+splitting it into two statements). The CI format check prints the diff it
+wants, so read that rather than guessing.
+
 ## Conventions
 
 - **Dart style.** `dart format` decides layout; do not hand-wrap against it.
@@ -69,6 +87,9 @@ CI runs all of the above on every pull request, including
 - **No new dependencies in `lattice_core`.** It is pure Dart on purpose. The
   adapter may depend on Flutter and nothing else.
 - Generic type parameters are `T` for the row type throughout.
+- Select on **tap-down**, not on tap. A `GestureDetector` carrying both
+  `onTap` and `onDoubleTap` cannot report the single tap until the double-tap
+  window closes, which makes every click feel a third of a second late.
 
 ## Tests
 
