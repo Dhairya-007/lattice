@@ -140,7 +140,10 @@ ValueValidator numberRange({num? min, num? max, String? message}) {
 }
 
 /// Composes validators, reporting the first failure.
-ValueValidator allOf(List<ValueValidator> validators) {
+///
+/// Named `combineValidators` rather than `allOf` so that it does not collide
+/// with the matcher and test packages' `allOf` in consumer code.
+ValueValidator combineValidators(List<ValueValidator> validators) {
   return (Object? value) {
     for (final validator in validators) {
       final error = validator(value);
