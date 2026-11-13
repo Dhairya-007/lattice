@@ -167,6 +167,123 @@ void main() {
     });
   });
 
+  group('formula injection', () {
+    String cellFor(String name, {bool sanitize = true}) {
+      final csv = CsvExporter(
+        [GridColumn<Product>(field: 'name', value: (p) => p.name)],
+        options: ExportOptions(
+          includeHeader: false,
+          sanitizeFormulas: sanitize,
+        ),
+      ).exportRows([Product(id: 1, name: name, category: 'x', price: 0)]);
+      return csv.trimRight();
+    }
+
+    test('recognises every character a spreadsheet executes', () {
+      for (final start in ['=', '+', '-', '@', '\t', '\r']) {
+        expect(
+          CsvExporter.isFormula('${start}cmd'),
+          isTrue,
+          reason: 'should treat a leading "$start" as a formula',
+        );
+      }
+      expect(CsvExporter.isFormula('Keyboard'), isFalse);
+      expect(CsvExporter.isFormula(''), isFalse);
+    });
+
+    test('neutralises a formula by default', () {
+      expect(cellFor('=1+1'), "'=1+1");
+      expect(cellFor('@SUM(A1)'), "'@SUM(A1)");
+    });
+
+    test('neutralises the attack that fetches a remote payload', () {
+      // The canonical CSV injection: a cell that runs a command on open.
+      const attack = '=cmd|\' /C calc\'!A0';
+      final exported = cellFor(attack);
+      expect(exported.startsWith("'"), isTrue);
+      expect(exported.startsWith('='), isFalse);
+    });
+
+    test('puts the prefix inside the quotes, not outside them', () {
+      // Outside, a reader would strip it with the quotes and run the formula.
+      final exported = cellFor('=A1,B1');
+      expect(exported, startsWith('"\''));
+      expect(exported, endsWith('"'));
+    });
+
+    test('leaves ordinary values untouched', () {
+      expect(cellFor('Keyboard'), 'Keyboard');
+      expect(cellFor('12.50 USD'), '12.50 USD');
+      expect(cellFor('a=b'), 'a=b');
+    });
+
+    test('a negative number is quoted as text, which is the trade-off', () {
+      // '-5' is indistinguishable from the start of a formula, so it is
+      // sanitised too. Machine-read exports should turn this off.
+      expect(cellFor('-5'), "'-5");
+      expect(cellFor('-5', sanitize: false), '-5');
+    });
+
+    test('can be turned off for a machine-read export', () {
+      expect(cellFor('=1+1', sanitize: false), '=1+1');
+    });
+
+    test('a custom prefix is honoured', () {
+      final csv = CsvExporter(
+        [GridColumn<Product>(field: 'name', value: (p) => p.name)],
+        options: const ExportOptions(
+          includeHeader: false,
+          formulaPrefix: '_',
+        ),
+      ).exportRows([Product(id: 1, name: '=1+1', category: 'x', price: 0)]);
+      expect(csv.trimRight(), '_=1+1');
+    });
+
+    test('leading spaces do not hide a formula', () {
+      // Spreadsheets trim them on import, and a grouped export indents its
+      // rows, so the check has to look past them.
+      expect(CsvExporter.isFormula('   =cmd'), isTrue);
+      expect(CsvExporter.isFormula('   safe'), isFalse);
+      expect(cellFor('   =cmd'), "'   =cmd");
+    });
+
+    test('group labels and headers go through the same guard', () {
+      final columns = [
+        GridColumn<Product>(field: 'name', value: (p) => p.name),
+        GridColumn<Product>(field: 'category', value: (p) => p.category),
+      ];
+      final groups = buildGroups(
+        [Product(id: 1, name: '=evil()', category: 'Input', price: 1)],
+        [const GroupSpec('category')],
+        {for (final c in columns) c.field: c},
+      );
+      final csv = CsvExporter(
+        columns,
+      ).exportGroups(groups, GroupExpansionState());
+      // The prefix lands ahead of the indent, so the apostrophe is the
+      // first character the spreadsheet sees.
+      expect(csv, contains("'    =evil()"));
+      for (final line in csv.split('\r\n')) {
+        expect(CsvExporter.isFormula(line), isFalse);
+      }
+    });
+
+    test('clipboard text is sanitised too', () {
+      expect(
+        toClipboardText<Product>([
+          ['=1+1', 'safe'],
+        ]),
+        "'=1+1\tsafe",
+      );
+      expect(
+        toClipboardText<Product>([
+          ['=1+1'],
+        ], sanitizeFormulas: false),
+        '=1+1',
+      );
+    });
+  });
+
   test('toClipboardText joins cells with tabs and rows with newlines', () {
     expect(
       toClipboardText<Product>([
