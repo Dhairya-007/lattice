@@ -568,36 +568,48 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     final frozenBottom = _controller.effectiveFrozenBottom;
     final scrollingCount = _controller.rowCount - frozenTop - frozenBottom;
 
+    // A band's height is the sum of its rows. It has to be explicit: the
+    // panes inside lay out with a stretched Row, which cannot size itself
+    // against the unbounded height a Column child would hand it.
+    double bandHeight(List<GridRow<T>> rows) {
+      final builder = widget.rowHeightBuilder;
+      if (builder == null) return rows.length * _rowHeight;
+      return rows.fold<double>(0, (sum, row) => sum + builder(row));
+    }
+
     Widget band(List<GridRow<T>> rows, int offset, ScrollController h) {
-      return Container(
-        decoration: BoxDecoration(
-          color: theme.frozenRowBackground ?? theme.headerBackground,
-          border: Border(
-            top: offset == 0
-                ? BorderSide.none
-                : BorderSide(color: theme.frozenPaneLine, width: 1.5),
-            bottom: offset == 0
-                ? BorderSide(color: theme.frozenPaneLine, width: 1.5)
-                : BorderSide.none,
+      return SizedBox(
+        height: bandHeight(rows),
+        child: Container(
+          decoration: BoxDecoration(
+            color: theme.frozenRowBackground ?? theme.headerBackground,
+            border: Border(
+              top: offset == 0
+                  ? BorderSide.none
+                  : BorderSide(color: theme.frozenPaneLine, width: 1.5),
+              bottom: offset == 0
+                  ? BorderSide(color: theme.frozenPaneLine, width: 1.5)
+                  : BorderSide.none,
+            ),
           ),
-        ),
-        child: _buildPanes(
-          layout: layout,
-          theme: theme,
-          horizontal: h,
-          paneBuilder: (columns, isFirstPane) => _buildFrozenBand(
-            rows: rows,
-            indexOffset: offset,
-            columns: columns,
-            isFirstPane: isFirstPane,
+          child: _buildPanes(
+            layout: layout,
             theme: theme,
-          ),
-          scrollingBuilder: (columns, isFirstPane) => _buildFrozenBand(
-            rows: rows,
-            indexOffset: offset,
-            columns: columns,
-            isFirstPane: isFirstPane,
-            theme: theme,
+            horizontal: h,
+            paneBuilder: (columns, isFirstPane) => _buildFrozenBand(
+              rows: rows,
+              indexOffset: offset,
+              columns: columns,
+              isFirstPane: isFirstPane,
+              theme: theme,
+            ),
+            scrollingBuilder: (columns, isFirstPane) => _buildFrozenBand(
+              rows: rows,
+              indexOffset: offset,
+              columns: columns,
+              isFirstPane: isFirstPane,
+              theme: theme,
+            ),
           ),
         ),
       );
