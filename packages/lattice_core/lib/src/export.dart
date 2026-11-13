@@ -16,6 +16,8 @@ class ExportOptions {
     this.includeGroupRows = true,
     this.groupIndent = '    ',
     this.formatted = true,
+    this.sanitizeFormulas = true,
+    this.formulaPrefix = "'",
   });
 
   final bool includeHeader;
@@ -34,6 +36,24 @@ class ExportOptions {
   /// Whether to export display text (respecting each column's formatter) or
   /// raw values. Raw is the right choice when the file will be re-imported.
   final bool formatted;
+
+  /// Neutralises values a spreadsheet would execute as a formula.
+  ///
+  /// A cell beginning `=`, `+`, `-`, `@`, tab or carriage return is run as a
+  /// formula when the file is opened in Excel, Sheets or LibreOffice, which
+  /// makes an export of user-supplied data a delivery mechanism for
+  /// [CSV injection](https://owasp.org/www-community/attacks/CSV_Injection).
+  ///
+  /// On by default: the unsafe behaviour is only ever noticed after it has
+  /// been exploited, so it should not be what you get by forgetting. Turn it
+  /// off only for a file that is machine-read and must round-trip exactly.
+  final bool sanitizeFormulas;
+
+  /// Prepended to a value that would otherwise be read as a formula.
+  ///
+  /// A leading apostrophe is the spreadsheet convention for "treat this as
+  /// text"; it is consumed on import rather than shown as part of the value.
+  final String formulaPrefix;
 }
 
 /// Writes rows as delimiter-separated text.
@@ -138,9 +158,37 @@ class CsvExporter<T> {
     out.write(options.lineEnding);
   }
 
+  /// Characters that start a formula in Excel, Sheets and LibreOffice.
+  ///
+  /// The tab and carriage return are included because a leading one is
+  /// stripped by some readers, exposing the character after it - so `\t=cmd`
+  /// becomes `=cmd` on import.
+  static const _formulaStarters = {0x3d, 0x2b, 0x2d, 0x40, 0x09, 0x0d};
+
+  /// Whether a spreadsheet would execute [value] rather than show it.
+  ///
+  /// Leading spaces are skipped: spreadsheets trim them on import, so
+  /// `"   =cmd"` is executed just as `"=cmd"` is. A grouped export indents
+  /// its rows, which would otherwise hide a formula from this check. Tabs
+  /// and carriage returns are not skipped - they are starters in their own
+  /// right.
+  static bool isFormula(String value) {
+    for (var i = 0; i < value.length; i++) {
+      final unit = value.codeUnitAt(i);
+      if (unit == 0x20) continue;
+      return _formulaStarters.contains(unit);
+    }
+    return false;
+  }
+
   /// RFC 4180 quoting: wrap in quotes when the value contains the delimiter, a
   /// quote or a newline, and double any embedded quotes.
-  void _writeEscaped(StringBuffer out, String value) {
+  void _writeEscaped(StringBuffer out, String rawValue) {
+    // Sanitise before quoting: the prefix has to end up inside the quotes,
+    // or the reader strips it along with them.
+    final value = options.sanitizeFormulas && isFormula(rawValue)
+        ? '${options.formulaPrefix}$rawValue'
+        : rawValue;
     var needsQuotes = false;
     for (var i = 0; i < value.length; i++) {
       final unit = value.codeUnitAt(i);
@@ -172,9 +220,18 @@ class CsvExporter<T> {
 
 /// Serialises a cell range as tab-separated text, the format spreadsheets and
 /// most editors accept from the clipboard.
+///
+/// Sanitises formulas by default for the same reason the CSV exporter does:
+/// pasting a copied range into a spreadsheet is exactly the path
+/// [CsvExporter.isFormula] guards against.
 String toClipboardText<T>(
   List<List<String>> cells, {
   String delimiter = '\t',
+  bool sanitizeFormulas = true,
+  String formulaPrefix = "'",
 }) {
-  return cells.map((row) => row.join(delimiter)).join('\n');
+  String cell(String value) => sanitizeFormulas && CsvExporter.isFormula(value)
+      ? '$formulaPrefix$value'
+      : value;
+  return cells.map((row) => row.map(cell).join(delimiter)).join('\n');
 }

@@ -34,7 +34,9 @@ narrow and worth stating:
   beginning `=`, `+`, `-` or `@` is executed as a formula when the file is
   opened in a spreadsheet, which turns exported user data into
   [CSV injection](https://owasp.org/www-community/attacks/CSV_Injection).
-  Mitigation belongs in the exporter, not in every consumer.
+  Mitigated in the exporter rather than left to every consumer:
+  `ExportOptions.sanitizeFormulas` is on by default, and covers clipboard
+  text as well as files.
 - **Leaking values across a trust boundary** — a filter, group label, tooltip
   or clipboard payload that exposes data from a column the user was not meant
   to see.
