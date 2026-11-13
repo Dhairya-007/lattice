@@ -34,7 +34,20 @@ sealed class Filter {
   const Filter();
 
   /// Whether [row] (as a field -> value map) satisfies this filter.
-  bool matches(Map<String, Object?> row);
+  bool matches(Map<String, Object?> row) => matchesRow((field) => row[field]);
+
+  /// Whether a row satisfies this filter, reading values through [read].
+  ///
+  /// The reader form exists so that filtering a wide table does not allocate
+  /// a map per row: at 50k rows that allocation dominated the filter itself.
+  bool matchesRow(Object? Function(String field) read);
+
+  /// A stable string identifying this filter, for use as a cache key.
+  ///
+  /// Two filters with the same fingerprint select the same rows. It is not a
+  /// serialisation format - use [toJson] for that - and may change shape
+  /// between versions.
+  String get fingerprint;
 
   /// Fields referenced anywhere in this subtree.
   Set<String> get fields;
@@ -94,9 +107,13 @@ class FilterCondition extends Filter {
   }
 
   @override
-  bool matches(Map<String, Object?> row) {
+  String get fingerprint =>
+      '$field|${operator.name}|$value|$secondValue|$caseSensitive';
+
+  @override
+  bool matchesRow(Object? Function(String field) read) {
     if (isEmpty) return true;
-    final actual = row[field];
+    final actual = read(field);
     switch (operator) {
       case FilterOperator.equals:
         return _compare(actual, value) == 0;
@@ -215,11 +232,22 @@ class FilterGroup extends Filter {
   Set<String> get fields => children.expand((c) => c.fields).toSet();
 
   @override
-  bool matches(Map<String, Object?> row) {
+  String get fingerprint =>
+      '(${children.map((c) => c.fingerprint).join(join == FilterJoin.and ? '&' : '|')})';
+
+  @override
+  bool matchesRow(Object? Function(String field) read) {
     if (children.isEmpty) return true;
-    return join == FilterJoin.and
-        ? children.every((c) => c.matches(row))
-        : children.any((c) => c.matches(row));
+    if (join == FilterJoin.and) {
+      for (final child in children) {
+        if (!child.matchesRow(read)) return false;
+      }
+      return true;
+    }
+    for (final child in children) {
+      if (child.matchesRow(read)) return true;
+    }
+    return false;
   }
 
   @override
