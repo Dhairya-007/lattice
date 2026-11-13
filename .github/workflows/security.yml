@@ -46,7 +46,6 @@ jobs:
         with:
           scan-args: |-
             --recursive
-            --skip-git
             ./
 
   engine-purity:
