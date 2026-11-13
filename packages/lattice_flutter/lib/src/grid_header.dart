@@ -12,6 +12,8 @@ class LatticeHeaderCell<T> extends StatelessWidget {
     required this.width,
     required this.theme,
     this.isLastInPane = false,
+    this.showMenu = false,
+    this.allowReorder = false,
     super.key,
   });
 
@@ -20,6 +22,12 @@ class LatticeHeaderCell<T> extends StatelessWidget {
   final double width;
   final LatticeGridTheme theme;
   final bool isLastInPane;
+
+  /// Shows the per-column menu: sort, pin, hide, reset width.
+  final bool showMenu;
+
+  /// Allows dragging this header onto another to reorder the columns.
+  final bool allowReorder;
 
   void _onTap() {
     // Ctrl (or cmd on Apple platforms) builds a multi-level sort instead of
@@ -89,7 +97,15 @@ class LatticeHeaderCell<T> extends StatelessWidget {
     Widget content = Container(
       padding: theme.cellPadding,
       alignment: Alignment.centerLeft,
-      child: Row(mainAxisSize: MainAxisSize.max, children: children),
+      child: Row(
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          ...children,
+          // The slot is reserved whether or not the menu is shown, so the
+          // title does not shift when the pointer enters the cell.
+          if (showMenu) _ColumnMenu<T>(controller: controller, column: column),
+        ],
+      ),
     );
 
     if (column.sortable) {
@@ -102,6 +118,45 @@ class LatticeHeaderCell<T> extends StatelessWidget {
 
     if (column.tooltip != null) {
       content = Tooltip(message: column.tooltip!, child: content);
+    }
+
+    if (allowReorder) {
+      // Captured before the wrapping below: a closure captures the variable,
+      // not its value, so a builder that read `content` would read the
+      // wrapper it is inside and recurse forever.
+      final inner = content;
+      // The payload is the field, so a drop only needs to know where it
+      // landed; the controller works out the new order.
+      content = DragTarget<String>(
+        onWillAcceptWithDetails: (details) => details.data != column.field,
+        onAcceptWithDetails: (details) =>
+            _acceptDrop(details.data, controller, column),
+        builder: (context, candidate, _) {
+          final target = candidate.isNotEmpty;
+          return DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(
+                  color: target
+                      ? theme.focusedCellBorder
+                      : const Color(0x00000000),
+                  width: 2,
+                ),
+              ),
+            ),
+            child: inner,
+          );
+        },
+      );
+      final draggableChild = content;
+      content = Draggable<String>(
+        data: column.field,
+        axis: Axis.horizontal,
+        dragAnchorStrategy: pointerDragAnchorStrategy,
+        feedback: _DragGhost(title: column.title, theme: theme),
+        childWhenDragging: Opacity(opacity: 0.35, child: draggableChild),
+        child: draggableChild,
+      );
     }
 
     return SizedBox(
@@ -134,6 +189,265 @@ class LatticeHeaderCell<T> extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Moves [field] to where [onto] currently sits.
+///
+/// Dropping onto a column in a different pane moves it into that pane as
+/// well, which is how a column is dragged out of - or into - a frozen one.
+void _acceptDrop<T>(
+  String field,
+  GridController<T> controller,
+  GridColumn<T> onto,
+) {
+  final target = controller.visibleColumns.indexWhere(
+    (c) => c.field == onto.field,
+  );
+  if (target < 0) return;
+  final moved = controller.column(field);
+  if (moved != null && moved.pin != onto.pin) {
+    controller.setColumnPin(field, onto.pin);
+  }
+  controller.moveColumn(field, target);
+}
+
+/// The ghost that follows the pointer while a header is being dragged.
+class _DragGhost extends StatelessWidget {
+  const _DragGhost({required this.title, required this.theme});
+
+  final String title;
+  final LatticeGridTheme theme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0x00000000),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: theme.headerBackground,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: theme.focusedCellBorder, width: 1.5),
+          boxShadow: const [
+            BoxShadow(color: Color(0x33000000), blurRadius: 12),
+          ],
+        ),
+        child: Text(title, style: theme.headerTextStyle),
+      ),
+    );
+  }
+}
+
+/// What one header's menu offers.
+enum _ColumnAction {
+  sortAsc,
+  sortDesc,
+  clearSort,
+  pinStart,
+  pinEnd,
+  unpin,
+  hide,
+  resetWidth,
+  manage,
+}
+
+/// The per-column menu.
+class _ColumnMenu<T> extends StatelessWidget {
+  const _ColumnMenu({required this.controller, required this.column});
+
+  final GridController<T> controller;
+  final GridColumn<T> column;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 22,
+      child: PopupMenuButton<_ColumnAction>(
+        tooltip: 'Column options',
+        padding: EdgeInsets.zero,
+        iconSize: 15,
+        icon: const Icon(Icons.more_vert_rounded),
+        onSelected: (action) => _apply(context, action),
+        itemBuilder: (context) => [
+          if (column.sortable) ...[
+            const PopupMenuItem(
+              value: _ColumnAction.sortAsc,
+              child: _MenuRow(
+                icon: Icons.arrow_upward,
+                label: 'Sort ascending',
+              ),
+            ),
+            const PopupMenuItem(
+              value: _ColumnAction.sortDesc,
+              child: _MenuRow(
+                icon: Icons.arrow_downward,
+                label: 'Sort descending',
+              ),
+            ),
+            if (controller.sortFor(column.field) != null)
+              const PopupMenuItem(
+                value: _ColumnAction.clearSort,
+                child: _MenuRow(icon: Icons.clear, label: 'Clear sort'),
+              ),
+            const PopupMenuDivider(),
+          ],
+          if (column.pin != ColumnPin.start)
+            const PopupMenuItem(
+              value: _ColumnAction.pinStart,
+              child: _MenuRow(
+                icon: Icons.push_pin_outlined,
+                label: 'Pin to the start',
+              ),
+            ),
+          if (column.pin != ColumnPin.end)
+            const PopupMenuItem(
+              value: _ColumnAction.pinEnd,
+              child: _MenuRow(
+                icon: Icons.push_pin_outlined,
+                label: 'Pin to the end',
+              ),
+            ),
+          if (column.pin != ColumnPin.none)
+            const PopupMenuItem(
+              value: _ColumnAction.unpin,
+              child: _MenuRow(icon: Icons.push_pin, label: 'Unpin'),
+            ),
+          const PopupMenuDivider(),
+          if (column.resizable)
+            const PopupMenuItem(
+              value: _ColumnAction.resetWidth,
+              child: _MenuRow(icon: Icons.width_normal, label: 'Reset width'),
+            ),
+          const PopupMenuItem(
+            value: _ColumnAction.hide,
+            child: _MenuRow(icon: Icons.visibility_off, label: 'Hide column'),
+          ),
+          const PopupMenuItem(
+            value: _ColumnAction.manage,
+            child: _MenuRow(icon: Icons.view_column, label: 'Choose columns…'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _apply(BuildContext context, _ColumnAction action) {
+    switch (action) {
+      case _ColumnAction.sortAsc:
+        controller.setSorts([SortSpec(column.field)]);
+      case _ColumnAction.sortDesc:
+        controller.setSorts([
+          SortSpec(column.field, direction: SortDirection.descending),
+        ]);
+      case _ColumnAction.clearSort:
+        controller.clearSorts();
+      case _ColumnAction.pinStart:
+        controller.setColumnPin(column.field, ColumnPin.start);
+      case _ColumnAction.pinEnd:
+        controller.setColumnPin(column.field, ColumnPin.end);
+      case _ColumnAction.unpin:
+        controller.setColumnPin(column.field, ColumnPin.none);
+      case _ColumnAction.resetWidth:
+        controller.resetColumnWidth(column.field);
+      case _ColumnAction.hide:
+        controller.setColumnVisible(column.field, false);
+      case _ColumnAction.manage:
+        showColumnChooser<T>(context, controller);
+    }
+  }
+}
+
+class _MenuRow extends StatelessWidget {
+  const _MenuRow({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [Icon(icon, size: 16), const SizedBox(width: 10), Text(label)],
+    );
+  }
+}
+
+/// Opens a dialog listing every column, with a switch per column.
+///
+/// The per-column menu can hide a column; without this there would be no way
+/// to bring one back, which is the usual way a column chooser is forgotten.
+Future<void> showColumnChooser<T>(
+  BuildContext context,
+  GridController<T> controller,
+) {
+  return showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Columns'),
+      content: SizedBox(
+        width: 320,
+        child: _ColumnChooserList<T>(controller: controller),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Done'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// The list inside the chooser.
+///
+/// Stateful so it subscribes to the controller exactly once. Built inline it
+/// would add a listener on every rebuild, and since each listener triggers
+/// another rebuild, the subscriptions would multiply with every change.
+class _ColumnChooserList<T> extends StatefulWidget {
+  const _ColumnChooserList({required this.controller});
+
+  final GridController<T> controller;
+
+  @override
+  State<_ColumnChooserList<T>> createState() => _ColumnChooserListState<T>();
+}
+
+class _ColumnChooserListState<T> extends State<_ColumnChooserList<T>> {
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onChanged);
+    super.dispose();
+  }
+
+  void _onChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    return ListView(
+      shrinkWrap: true,
+      children: [
+        for (final column in controller.columns)
+          SwitchListTile(
+            dense: true,
+            title: Text(column.title),
+            value: column.visible,
+            // The last visible column cannot be hidden: an empty grid has no
+            // header left to bring anything back from.
+            onChanged: column.visible && controller.visibleColumns.length <= 1
+                ? null
+                : (on) => controller.setColumnVisible(column.field, on),
+          ),
+      ],
     );
   }
 }
