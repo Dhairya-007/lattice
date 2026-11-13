@@ -297,6 +297,7 @@ class LatticeStackedHeaderRow<T> extends StatelessWidget {
     required this.columns,
     required this.theme,
     required this.height,
+    this.drawnBands,
     super.key,
   });
 
@@ -305,9 +306,13 @@ class LatticeStackedHeaderRow<T> extends StatelessWidget {
   final LatticeGridTheme theme;
   final double height;
 
+  /// Shared across the panes of one header row, so a band split by a frozen
+  /// pane is titled in the first pane only.
+  final Set<HeaderBand>? drawnBands;
+
   @override
   Widget build(BuildContext context) {
-    final segments = layoutHeaderRow<T>(columns, row);
+    final segments = layoutHeaderRow<T>(columns, row, drawn: drawnBands);
     return SizedBox(
       height: height,
       child: Row(

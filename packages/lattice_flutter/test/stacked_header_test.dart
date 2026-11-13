@@ -138,7 +138,7 @@ void main() {
     );
     final before = tester.getRect(find.text('First half')).left;
 
-    await tester.drag(find.text('C 3'), const Offset(-300, 0));
+    await tester.drag(find.text('C3'), const Offset(-300, 0));
     await tester.pumpAndSettle();
 
     expect(tester.getRect(find.text('First half')).left, lessThan(before));

@@ -413,12 +413,16 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     GridLayout<T> layout,
     LatticeGridTheme theme,
   ) {
+    // One set per row, threaded through the panes in display order, so a
+    // band spanning a frozen column and a scrolling one is titled once.
+    final drawn = <HeaderBand>{};
     Widget cells(List<ColumnLayout<T>> columns, bool isFirstPane) {
       return LatticeStackedHeaderRow<T>(
         row: row,
         columns: columns,
         theme: theme,
         height: theme.stackedHeaderHeight,
+        drawnBands: drawn,
       );
     }
 

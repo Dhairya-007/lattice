@@ -112,6 +112,26 @@ void main() {
       expect(scrolling.first.width, 100);
     });
 
+    test('a shared drawn set titles a split band in the first pane only', () {
+      final layout = computeLayout<Product>(
+        cols(namePin: ColumnPin.start),
+        viewportWidth: 1000,
+      );
+      final drawn = <HeaderBand>{};
+      final leading = layoutHeaderRow<Product>(
+        layout.leading,
+        identity,
+        drawn: drawn,
+      );
+      final scrolling = layoutHeaderRow<Product>(
+        layout.scrolling,
+        identity,
+        drawn: drawn,
+      );
+      expect(leading.single.isContinuation, isFalse);
+      expect(scrolling.first.isContinuation, isTrue);
+    });
+
     test('an interrupted band becomes two segments, titled once', () {
       // The user has dragged 'price' into the middle of the Identity band.
       final reordered = [cols()[0], cols()[2], cols()[1], cols()[3]];

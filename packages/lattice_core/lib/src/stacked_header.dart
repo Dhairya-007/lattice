@@ -96,10 +96,15 @@ class HeaderBandLayout<T> {
 /// covering band changes, which handles three awkward cases without special
 /// casing any of them: a band split across panes, a band interrupted by a
 /// column the user moved into it, and columns no band covers.
+/// [drawn] carries continuation state **between panes**. A band spanning a
+/// frozen column and a scrolling one is laid out twice, once per pane, and
+/// only the first segment should carry the title — so pass one set through
+/// the panes in display order. Omitting it treats every pane as the first.
 List<HeaderBandLayout<T>> layoutHeaderRow<T>(
   List<ColumnLayout<T>> pane,
-  HeaderRow row,
-) {
+  HeaderRow row, {
+  Set<HeaderBand>? drawn,
+}) {
   if (pane.isEmpty) return const [];
 
   final owner = <String, HeaderBand>{};
@@ -111,7 +116,7 @@ List<HeaderBandLayout<T>> layoutHeaderRow<T>(
   }
 
   final segments = <HeaderBandLayout<T>>[];
-  final drawn = <HeaderBand>{};
+  final alreadyDrawn = drawn ?? <HeaderBand>{};
 
   HeaderBand? currentBand;
   var currentColumns = <ColumnLayout<T>>[];
@@ -128,7 +133,7 @@ List<HeaderBandLayout<T>> layoutHeaderRow<T>(
         offset: currentOffset,
         width: currentWidth,
         columns: List<ColumnLayout<T>>.unmodifiable(currentColumns),
-        isContinuation: band != null && !drawn.add(band),
+        isContinuation: band != null && !alreadyDrawn.add(band),
       ),
     );
   }
