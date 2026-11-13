@@ -29,11 +29,18 @@ jobs:
           channel: stable
           cache: true
 
+      # Each package is resolved only if present, so a branch that predates
+      # one of them still gets scanned instead of failing here.
       - name: Resolve dependencies
         run: |
-          (cd packages/lattice_core && dart pub get)
-          (cd packages/lattice_flutter && flutter pub get)
-          (cd packages/lattice_flutter/example && flutter pub get)
+          for dir in packages/lattice_core packages/lattice_flutter packages/lattice_flutter/example; do
+            if [ -f "$dir/pubspec.yaml" ]; then
+              echo "Resolving $dir"
+              (cd "$dir" && flutter pub get)
+            else
+              echo "Skipping $dir (not present)"
+            fi
+          done
 
       - uses: google/osv-scanner-action/osv-scanner-action@v2.7.1
         with:
@@ -68,6 +75,7 @@ jobs:
           echo 'Engine is clean.'
 
       - name: Reject the deprecated Material shim
+        if: hashFiles('packages/lattice_flutter/pubspec.yaml') != ''
         run: |
           if grep -rn "package:flutter/material.dart" packages/lattice_flutter/lib packages/lattice_flutter/test 2>/dev/null; then
             echo 'Material lives in package:material_ui since Flutter 3.47.'
