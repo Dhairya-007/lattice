@@ -15,6 +15,7 @@ import 'query.dart';
 import 'rows.dart';
 import 'selection.dart';
 import 'sort.dart';
+import 'stacked_header.dart';
 
 /// Owns every piece of grid state and the pipeline that turns it into rows.
 ///
@@ -31,6 +32,7 @@ class GridController<T> with GridChangeNotifier {
     List<Aggregation> aggregations = const [],
     Filter? filter,
     SelectionMode selectionMode = SelectionMode.multiRow,
+    List<HeaderRow> stackedHeaders = const [],
     int? pageSize,
     bool groupsExpandedByDefault = true,
     this.columnFit = ColumnFit.none,
@@ -40,6 +42,7 @@ class GridController<T> with GridChangeNotifier {
         _groups = List<GroupSpec>.of(groups),
         _aggregations = List<Aggregation>.of(aggregations),
         _filter = filter,
+        _stackedHeaders = List<HeaderRow>.of(stackedHeaders),
         _pageSize = pageSize,
         selection = SelectionState(mode: selectionMode),
         expansion =
@@ -62,6 +65,7 @@ class GridController<T> with GridChangeNotifier {
   int _pageIndex = 0;
 
   final Map<String, double> _columnWidths = {};
+  List<HeaderRow> _stackedHeaders;
 
   GridResult<T>? _result;
   List<GridRow<T>> _visibleRows = const [];
@@ -420,6 +424,22 @@ class GridController<T> with GridChangeNotifier {
     if (from < 0) return;
     final column = _columns.removeAt(from);
     _columns.insert(newIndex.clamp(0, _columns.length), column);
+    notifyListeners();
+  }
+
+  /// Header rows spanning several columns, drawn above the column titles,
+  /// outermost first.
+  List<HeaderRow> get stackedHeaders => List.unmodifiable(_stackedHeaders);
+
+  set stackedHeaders(List<HeaderRow> rows) {
+    _stackedHeaders = List<HeaderRow>.of(rows);
+    assert(() {
+      final problems = describeHeaderProblems<T>(_stackedHeaders, _columns);
+      if (problems.isNotEmpty) {
+        throw StateError('Stacked headers:\n  ${problems.join('\n  ')}');
+      }
+      return true;
+    }());
     notifyListeners();
   }
 

@@ -43,6 +43,8 @@ class LatticeGridTheme {
     required this.footerTextStyle,
     this.rowHeight = 40,
     this.headerHeight = 44,
+    this.stackedHeaderHeight = 36,
+    this.stackedHeaderBackground,
     this.filterRowHeight = 40,
     this.footerHeight = 48,
     this.cellPadding = const EdgeInsets.symmetric(horizontal: 12),
@@ -152,6 +154,11 @@ class LatticeGridTheme {
         GridDensity.standard => 44,
         GridDensity.comfortable => 56,
       },
+      stackedHeaderHeight: switch (density) {
+        GridDensity.compact => 28,
+        GridDensity.standard => 36,
+        GridDensity.comfortable => 46,
+      },
       filterRowHeight: switch (density) {
         GridDensity.compact => 34,
         GridDensity.standard => 40,
@@ -190,6 +197,12 @@ class LatticeGridTheme {
 
   final double rowHeight;
   final double headerHeight;
+
+  /// Height of each stacked header row.
+  final double stackedHeaderHeight;
+
+  /// Background for stacked header rows; defaults to [headerBackground].
+  final Color? stackedHeaderBackground;
   final double filterRowHeight;
   final double footerHeight;
   final EdgeInsets cellPadding;
@@ -263,6 +276,8 @@ class LatticeGridTheme {
     TextStyle? footerTextStyle,
     double? rowHeight,
     double? headerHeight,
+    double? stackedHeaderHeight,
+    Color? stackedHeaderBackground,
     double? filterRowHeight,
     double? footerHeight,
     EdgeInsets? cellPadding,
@@ -300,6 +315,9 @@ class LatticeGridTheme {
       footerTextStyle: footerTextStyle ?? this.footerTextStyle,
       rowHeight: rowHeight ?? this.rowHeight,
       headerHeight: headerHeight ?? this.headerHeight,
+      stackedHeaderHeight: stackedHeaderHeight ?? this.stackedHeaderHeight,
+      stackedHeaderBackground:
+          stackedHeaderBackground ?? this.stackedHeaderBackground,
       filterRowHeight: filterRowHeight ?? this.filterRowHeight,
       footerHeight: footerHeight ?? this.footerHeight,
       cellPadding: cellPadding ?? this.cellPadding,
