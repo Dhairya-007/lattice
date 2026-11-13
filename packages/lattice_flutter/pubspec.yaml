@@ -1,0 +1,30 @@
+name: lattice_flutter
+description: Open source Flutter data grid - frozen columns, virtualized rows, multi-column sorting, filtering, grouping with aggregates, range selection and inline editing.
+version: 0.1.0
+repository: https://github.com/Dhairya-007/lattice
+issue_tracker: https://github.com/Dhairya-007/lattice/issues
+
+topics:
+  - datagrid
+  - table
+  - data-table
+  - widgets
+
+environment:
+  sdk: ^3.8.0
+  flutter: ">=3.47.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Material moved out of the Flutter SDK in 3.47; package:flutter/material.dart
+  # is a deprecated shim.
+  material_ui: ^1.11.0
+  # Switched to a hosted constraint at release time; see RELEASING.md.
+  lattice_core:
+    path: ../lattice_core
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0

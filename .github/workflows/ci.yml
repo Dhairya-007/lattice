@@ -27,8 +27,15 @@ jobs:
       - name: Install dependencies
         run: dart pub get
 
+      # On failure, print the diff the formatter wants: a contributor whose
+      # SDK formats differently otherwise has nothing to go on.
       - name: Check formatting
-        run: dart format --output=none --set-exit-if-changed .
+        run: |
+          dart format --output=none --set-exit-if-changed . || {
+            dart format .
+            git --no-pager diff
+            exit 1
+          }
 
       - name: Analyze
         run: dart analyze --fatal-infos
@@ -70,7 +77,12 @@ jobs:
       - name: Check formatting
         if: steps.check.outputs.exists == 'true'
         working-directory: packages/lattice_flutter
-        run: dart format --output=none --set-exit-if-changed .
+        run: |
+          dart format --output=none --set-exit-if-changed . || {
+            dart format .
+            git --no-pager diff
+            exit 1
+          }
 
       - name: Analyze
         if: steps.check.outputs.exists == 'true'
