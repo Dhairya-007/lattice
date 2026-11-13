@@ -174,7 +174,8 @@ class FilterCondition extends Filter {
       field: json['field']! as String,
       operator: FilterOperator.values.firstWhere(
         (o) => o.name == json['op'],
-        orElse: () => throw ArgumentError('Unknown filter operator ${json['op']}'),
+        orElse: () =>
+            throw ArgumentError('Unknown filter operator ${json['op']}'),
       ),
       value: json['value'],
       secondValue: json['secondValue'],
@@ -238,8 +239,7 @@ class FilterGroup extends Filter {
   }
 
   @override
-  String toString() =>
-      '(${children.join(' ${join.name.toUpperCase()} ')})';
+  String toString() => '(${children.join(' ${join.name.toUpperCase()} ')})';
 }
 
 const Object _unset = Object();

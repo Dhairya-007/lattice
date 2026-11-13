@@ -146,7 +146,8 @@ class SelectionState {
   }
 
   /// Applies a row click.
-  void selectRow(int index, [SelectionModifiers modifiers = SelectionModifiers.none]) {
+  void selectRow(int index,
+      [SelectionModifiers modifiers = SelectionModifiers.none]) {
     switch (mode) {
       case SelectionMode.none:
         return;
@@ -232,7 +233,8 @@ class SelectionState {
     _rows.removeWhere((i) => i >= rowCount);
     final active = _activeCell;
     if (active != null && active.row >= rowCount) {
-      _activeCell = rowCount == 0 ? null : CellAddress(rowCount - 1, active.field);
+      _activeCell =
+          rowCount == 0 ? null : CellAddress(rowCount - 1, active.field);
       _range = null;
     }
   }

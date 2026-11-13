@@ -153,7 +153,8 @@ void main() {
     });
 
     test('combineValidators reports the first failure', () {
-      final validate = combineValidators([requiredValue(), numberRange(min: 10)]);
+      final validate =
+          combineValidators([requiredValue(), numberRange(min: 10)]);
       expect(validate(null), 'Required');
       expect(validate(5), 'Must be at least 10');
       expect(validate(15), isNull);

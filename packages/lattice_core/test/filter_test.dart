@@ -171,7 +171,8 @@ void main() {
     test('isNull, isNotNull, isEmpty and isNotEmpty', () {
       expect(
         matches(
-          const FilterCondition(field: 'stock', operator: FilterOperator.isNull),
+          const FilterCondition(
+              field: 'stock', operator: FilterOperator.isNull),
           on: row(stock: null),
         ),
         isTrue,

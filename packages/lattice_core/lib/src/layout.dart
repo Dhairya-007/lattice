@@ -72,7 +72,8 @@ class GridLayout<T> {
   /// Total width of every column.
   double get totalWidth => leadingWidth + scrollingWidth + trailingWidth;
 
-  List<ColumnLayout<T>> get allColumns => [...leading, ...scrolling, ...trailing];
+  List<ColumnLayout<T>> get allColumns =>
+      [...leading, ...scrolling, ...trailing];
 
   int get columnCount => leading.length + scrolling.length + trailing.length;
 

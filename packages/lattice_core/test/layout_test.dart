@@ -9,9 +9,12 @@ void main() {
     ColumnPin pin = ColumnPin.none,
   }) =>
       [
-        GridColumn<Product>(field: 'name', value: (p) => p.name, width: width, pin: pin),
-        GridColumn<Product>(field: 'category', value: (p) => p.category, width: width),
-        GridColumn<Product>(field: 'price', value: (p) => p.price, width: width),
+        GridColumn<Product>(
+            field: 'name', value: (p) => p.name, width: width, pin: pin),
+        GridColumn<Product>(
+            field: 'category', value: (p) => p.category, width: width),
+        GridColumn<Product>(
+            field: 'price', value: (p) => p.price, width: width),
       ];
 
   group('widths and offsets', () {
@@ -23,8 +26,7 @@ void main() {
     });
 
     test('hidden columns take part in neither layout nor count', () {
-      final withHidden = columns()
-        ..[1] = columns()[1].copyWith(visible: false);
+      final withHidden = columns()..[1] = columns()[1].copyWith(visible: false);
       final layout = computeLayout(withHidden, viewportWidth: 1000);
       expect(layout.columnCount, 2);
       expect(layout.scrolling.map((c) => c.column.field), ['name', 'price']);
@@ -52,18 +54,15 @@ void main() {
         ),
       ];
       expect(
-        computeLayout(bounded, viewportWidth: 1000, widthOverrides: {'name': 20})
-            .scrolling
-            .first
-            .width,
+        computeLayout(bounded,
+            viewportWidth: 1000,
+            widthOverrides: {'name': 20}).scrolling.first.width,
         80,
       );
       expect(
         computeLayout(bounded,
-                viewportWidth: 1000, widthOverrides: {'name': 9999})
-            .scrolling
-            .first
-            .width,
+            viewportWidth: 1000,
+            widthOverrides: {'name': 9999}).scrolling.first.width,
         200,
       );
     });
@@ -118,10 +117,13 @@ void main() {
         fit: ColumnFit.stretch,
       );
       expect(layout.totalWidth, closeTo(900, 0.001));
-      expect(layout.scrolling.map((c) => c.width), everyElement(closeTo(300, 0.001)));
+      expect(layout.scrolling.map((c) => c.width),
+          everyElement(closeTo(300, 0.001)));
     });
 
-    test('stretch respects maxWidth and hands the remainder to a growable column', () {
+    test(
+        'stretch respects maxWidth and hands the remainder to a growable column',
+        () {
       final capped = [
         GridColumn<Product>(
           field: 'name',
@@ -129,7 +131,8 @@ void main() {
           width: 100,
           maxWidth: 120,
         ),
-        GridColumn<Product>(field: 'category', value: (p) => p.category, width: 100),
+        GridColumn<Product>(
+            field: 'category', value: (p) => p.category, width: 100),
       ];
       final layout =
           computeLayout(capped, viewportWidth: 400, fit: ColumnFit.stretch);
@@ -228,12 +231,14 @@ void main() {
           'Unit Price');
       expect(GridColumn<Product>(field: 'unit_price', value: (p) => 0).title,
           'Unit Price');
-      expect(GridColumn<Product>(field: 'price', value: (p) => 0).title, 'Price');
+      expect(
+          GridColumn<Product>(field: 'price', value: (p) => 0).title, 'Price');
     });
 
     test('numbers align to the end by default', () {
       expect(
-        GridColumn<Product>(field: 'price', value: (p) => 0, type: ColumnType.number)
+        GridColumn<Product>(
+                field: 'price', value: (p) => 0, type: ColumnType.number)
             .effectiveAlign,
         ColumnAlign.end,
       );
@@ -244,7 +249,8 @@ void main() {
     });
 
     test('a column is editable exactly when it has a setter', () {
-      expect(GridColumn<Product>(field: 'name', value: (p) => '').editable, isFalse);
+      expect(GridColumn<Product>(field: 'name', value: (p) => '').editable,
+          isFalse);
       expect(productColumnMap()['name']!.editable, isTrue);
     });
 

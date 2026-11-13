@@ -158,7 +158,8 @@ void main() {
       final selection = SelectionState(mode: SelectionMode.cellRange);
       selection.selectCell(const CellAddress(1, 'name'), fields);
       selection.extendTo(const CellAddress(1, 'category'), fields);
-      expect(selection.isCellSelected(const CellAddress(1, 'category')), isTrue);
+      expect(
+          selection.isCellSelected(const CellAddress(1, 'category')), isTrue);
       expect(selection.isCellSelected(const CellAddress(1, 'price')), isFalse);
     });
 
@@ -169,7 +170,8 @@ void main() {
       expect(selection.range!.rowCount, 1);
     });
 
-    test('a field no longer visible yields an empty range rather than a crash', () {
+    test('a field no longer visible yields an empty range rather than a crash',
+        () {
       final selection = SelectionState(mode: SelectionMode.cellRange);
       selection.selectCell(const CellAddress(1, 'gone'), ['name', 'price']);
       expect(selection.range!.coveredFields, isEmpty);
@@ -213,7 +215,10 @@ void main() {
     expect(const CellAddress(1, 'name'), isNot(const CellAddress(2, 'name')));
     // Deliberately equal: the point is that equal addresses collapse in a set.
     // ignore: equal_elements_in_set
-    final deduped = {const CellAddress(1, 'name'), const CellAddress(1, 'name')};
+    final deduped = {
+      const CellAddress(1, 'name'),
+      const CellAddress(1, 'name')
+    };
     expect(deduped.length, 1);
   });
 }

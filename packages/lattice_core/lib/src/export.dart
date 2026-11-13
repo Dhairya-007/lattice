@@ -76,7 +76,8 @@ class CsvExporter<T> {
   }
 
   /// Exports a grouped result, writing one indented header line per group.
-  String exportGroups(List<GroupNode<T>> groups, GroupExpansionState expansion) {
+  String exportGroups(
+      List<GroupNode<T>> groups, GroupExpansionState expansion) {
     final out = StringBuffer();
     final exported = _exported;
     if (options.includeHeader) {

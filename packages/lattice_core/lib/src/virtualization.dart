@@ -91,9 +91,7 @@ class RowMetrics {
 
   double heightOf(int index) {
     if (index < 0 || index >= rowCount) return 0;
-    return isUniform
-        ? _rowHeight
-        : _offsets![index + 1] - _offsets[index];
+    return isUniform ? _rowHeight : _offsets![index + 1] - _offsets[index];
   }
 
   /// The row containing [offset], clamped to the valid range.

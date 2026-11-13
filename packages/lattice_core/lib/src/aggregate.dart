@@ -4,7 +4,17 @@ library;
 import 'compare.dart';
 
 /// Built-in aggregate functions.
-enum AggregateType { count, countDistinct, sum, average, min, max, first, last, custom }
+enum AggregateType {
+  count,
+  countDistinct,
+  sum,
+  average,
+  min,
+  max,
+  first,
+  last,
+  custom
+}
 
 /// Computes one aggregate over the values of one column.
 class Aggregation {
@@ -147,8 +157,8 @@ AggregateResult computeAggregates<T>(
   if (aggregations.isEmpty) return const AggregateResult.empty();
   final out = <String, Object?>{};
   for (final aggregation in aggregations) {
-    out[aggregation.id] =
-        aggregation.apply([for (final row in rows) read(row, aggregation.field)]);
+    out[aggregation.id] = aggregation
+        .apply([for (final row in rows) read(row, aggregation.field)]);
   }
   return AggregateResult(out);
 }

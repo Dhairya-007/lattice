@@ -118,7 +118,8 @@ class GridColumn<T> {
 
   /// Effective alignment, resolving the type-based default.
   ColumnAlign get effectiveAlign =>
-      align ?? (type == ColumnType.number ? ColumnAlign.end : ColumnAlign.start);
+      align ??
+      (type == ColumnType.number ? ColumnAlign.end : ColumnAlign.start);
 
   /// Display text for [row] in this column.
   String formattedValue(T row) {

@@ -135,8 +135,8 @@ void main() {
       expect(result['stock.sum'], isNull);
       expect(result['stock.min'], isNull);
       expect(
-        computeAggregates(<Product>[], const [Aggregation.sum('price')], read)[
-            'price.sum'],
+        computeAggregates(
+            <Product>[], const [Aggregation.sum('price')], read)['price.sum'],
         isNull,
       );
     });
@@ -181,7 +181,8 @@ void main() {
     });
 
     test('no aggregations yields an empty result', () {
-      expect(computeAggregates(sampleProducts(), const [], read).isEmpty, isTrue);
+      expect(
+          computeAggregates(sampleProducts(), const [], read).isEmpty, isTrue);
     });
   });
 

@@ -41,7 +41,8 @@ class GridController<T> with GridChangeNotifier {
         _filter = filter,
         _pageSize = pageSize,
         selection = SelectionState(mode: selectionMode),
-        expansion = GroupExpansionState(expandedByDefault: groupsExpandedByDefault) {
+        expansion =
+            GroupExpansionState(expandedByDefault: groupsExpandedByDefault) {
     _dataSource.columns = columnsByField;
     _dataSource.addListener(_onSourceChanged);
     refresh();
@@ -100,7 +101,8 @@ class GridController<T> with GridChangeNotifier {
   List<GroupSpec> get groups => List.unmodifiable(_groups);
   List<Aggregation> get aggregations => List.unmodifiable(_aggregations);
   Filter? get filter => _filter;
-  Map<String, FilterCondition> get columnFilters => Map.unmodifiable(_columnFilters);
+  Map<String, FilterCondition> get columnFilters =>
+      Map.unmodifiable(_columnFilters);
   String get search => _search;
 
   /// The rows to render, group headers included.
@@ -179,7 +181,9 @@ class GridController<T> with GridChangeNotifier {
       sorts: _sorts,
       filter: conditions.isEmpty
           ? null
-          : (conditions.length == 1 ? conditions.first : FilterGroup.and(conditions)),
+          : (conditions.length == 1
+              ? conditions.first
+              : FilterGroup.and(conditions)),
       search: _search,
       searchFields: [
         for (final c in visibleColumns)
@@ -451,12 +455,14 @@ class GridController<T> with GridChangeNotifier {
   /// Fields in display order, which range selection needs to resolve columns.
   List<String> get visibleFields => [for (final c in visibleColumns) c.field];
 
-  void selectRow(int index, [SelectionModifiers modifiers = SelectionModifiers.none]) {
+  void selectRow(int index,
+      [SelectionModifiers modifiers = SelectionModifiers.none]) {
     selection.selectRow(index, modifiers);
     notifyListeners();
   }
 
-  void selectCell(CellAddress cell, [SelectionModifiers modifiers = SelectionModifiers.none]) {
+  void selectCell(CellAddress cell,
+      [SelectionModifiers modifiers = SelectionModifiers.none]) {
     selection.selectCell(cell, visibleFields, modifiers);
     notifyListeners();
   }
@@ -481,10 +487,12 @@ class GridController<T> with GridChangeNotifier {
     final fields = visibleFields;
     if (fields.isEmpty || _visibleRows.isEmpty) return;
     final current = selection.activeCell;
-    final row = ((current?.row ?? 0) + rowDelta).clamp(0, _visibleRows.length - 1);
+    final row =
+        ((current?.row ?? 0) + rowDelta).clamp(0, _visibleRows.length - 1);
     final columnIndex = current == null
         ? 0
-        : (fields.indexOf(current.field) + columnDelta).clamp(0, fields.length - 1);
+        : (fields.indexOf(current.field) + columnDelta)
+            .clamp(0, fields.length - 1);
     final next = CellAddress(row, fields[columnIndex]);
     if (extend) {
       extendSelectionTo(next);

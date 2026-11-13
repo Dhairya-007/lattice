@@ -36,7 +36,9 @@ class GroupSpec {
 
   @override
   bool operator ==(Object other) =>
-      other is GroupSpec && other.field == field && other.direction == direction;
+      other is GroupSpec &&
+      other.field == field &&
+      other.direction == direction;
 
   @override
   int get hashCode => Object.hash(field, direction);

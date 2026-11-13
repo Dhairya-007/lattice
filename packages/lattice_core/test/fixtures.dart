@@ -59,7 +59,8 @@ List<GridColumn<Product>> productColumns() => [
 List<Product> sampleProducts() => [
       Product(id: 1, name: 'Keyboard', category: 'Input', price: 80, stock: 12),
       Product(id: 2, name: 'Mouse', category: 'Input', price: 25, stock: 40),
-      Product(id: 3, name: 'Monitor', category: 'Display', price: 320, stock: 5),
+      Product(
+          id: 3, name: 'Monitor', category: 'Display', price: 320, stock: 5),
       Product(id: 4, name: 'Laptop', category: 'Compute', price: 1450),
       Product(
         id: 5,

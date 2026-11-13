@@ -26,7 +26,8 @@ class SortSpec {
   /// The same field sorted the other way.
   SortSpec get reversed => SortSpec(
         field,
-        direction: isAscending ? SortDirection.descending : SortDirection.ascending,
+        direction:
+            isAscending ? SortDirection.descending : SortDirection.ascending,
         nulls: nulls,
       );
 
@@ -41,7 +42,8 @@ class SortSpec {
         direction: json['dir'] == 'descending'
             ? SortDirection.descending
             : SortDirection.ascending,
-        nulls: json['nulls'] == 'first' ? NullsPosition.first : NullsPosition.last,
+        nulls:
+            json['nulls'] == 'first' ? NullsPosition.first : NullsPosition.last,
       );
 
   @override
