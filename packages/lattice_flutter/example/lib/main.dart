@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math';
-import 'dart:ui' show FontFeature;
 
 import 'package:lattice_flutter/lattice_flutter.dart';
 import 'package:material_ui/material_ui.dart';
