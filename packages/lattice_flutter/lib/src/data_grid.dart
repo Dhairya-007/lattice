@@ -124,6 +124,8 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
   late final ScrollController _hHeader;
   late final ScrollController _hFilter;
   late final ScrollController _hBody;
+  late final ScrollController _hFrozenTop;
+  late final ScrollController _hFrozenBottom;
 
   /// One per stacked header row, created on demand.
   ///
@@ -149,6 +151,8 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     _hHeader = _horizontal.addAndGet();
     _hFilter = _horizontal.addAndGet();
     _hBody = _horizontal.addAndGet();
+    _hFrozenTop = _horizontal.addAndGet();
+    _hFrozenBottom = _horizontal.addAndGet();
     widget.controller.addListener(_onControllerChanged);
   }
 
@@ -560,7 +564,55 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
           Center(child: Text('No rows', style: theme.footerTextStyle));
     }
 
-    final body = Scrollbar(
+    final frozenTop = _controller.effectiveFrozenTop;
+    final frozenBottom = _controller.effectiveFrozenBottom;
+    final scrollingCount = _controller.rowCount - frozenTop - frozenBottom;
+
+    // A band's height is the sum of its rows. It has to be explicit: the
+    // panes inside lay out with a stretched Row, which cannot size itself
+    // against the unbounded height a Column child would hand it.
+    double bandHeight(List<GridRow<T>> rows) {
+      final builder = widget.rowHeightBuilder;
+      if (builder == null) return rows.length * _rowHeight;
+      return rows.fold<double>(0, (sum, row) => sum + builder(row));
+    }
+
+    Widget band(List<GridRow<T>> rows, int offset, ScrollController h) {
+      return SizedBox(
+        height: bandHeight(rows),
+        child: ColoredBox(
+          color: theme.frozenRowBackground ?? theme.headerBackground,
+          child: _buildPanes(
+            layout: layout,
+            theme: theme,
+            horizontal: h,
+            paneBuilder: (columns, isFirstPane) => _buildFrozenBand(
+              rows: rows,
+              indexOffset: offset,
+              columns: columns,
+              isFirstPane: isFirstPane,
+              theme: theme,
+            ),
+            scrollingBuilder: (columns, isFirstPane) => _buildFrozenBand(
+              rows: rows,
+              indexOffset: offset,
+              columns: columns,
+              isFirstPane: isFirstPane,
+              theme: theme,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // The divider is a sibling rather than a border on the band, so the
+    // band's height stays exactly the height of its rows.
+    Widget divider() => Container(
+      height: theme.frozenRowDividerWidth,
+      color: theme.frozenPaneLine,
+    );
+
+    final scrolling = Scrollbar(
       controller: _vScrolling,
       child: _buildPanes(
         layout: layout,
@@ -576,6 +628,8 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
           // Only the scrolling pane shows scrollbars and takes wheel input
           // directly; the frozen panes follow it.
           physics: const ClampingScrollPhysics(),
+          indexOffset: frozenTop,
+          count: scrollingCount,
         ),
         scrollingBuilder: (columns, isFirstPane) => _buildRows(
           columns: columns,
@@ -583,9 +637,32 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
           theme: theme,
           scrollController: _vScrolling,
           physics: const ClampingScrollPhysics(),
+          indexOffset: frozenTop,
+          count: scrollingCount,
         ),
       ),
     );
+
+    final body = (frozenTop == 0 && frozenBottom == 0)
+        ? scrolling
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (frozenTop > 0) ...[
+                band(_controller.frozenTopRows, 0, _hFrozenTop),
+                divider(),
+              ],
+              Expanded(child: scrolling),
+              if (frozenBottom > 0) ...[
+                divider(),
+                band(
+                  _controller.frozenBottomRows,
+                  _controller.rowCount - frozenBottom,
+                  _hFrozenBottom,
+                ),
+              ],
+            ],
+          );
 
     if (!widget.stickyGroupHeaders || !_controller.isGrouped) return body;
     return Stack(
@@ -674,6 +751,8 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     required LatticeGridTheme theme,
     required ScrollController scrollController,
     required ScrollPhysics physics,
+    int indexOffset = 0,
+    int? count,
   }) {
     return ListView.builder(
       controller: scrollController,
@@ -681,18 +760,44 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
       // A fixed extent lets the viewport skip straight to the visible range
       // instead of measuring the rows above it.
       itemExtent: widget.rowHeightBuilder == null ? _rowHeight : null,
-      itemCount: _controller.rowCount,
+      itemCount: count ?? _controller.rowCount,
       itemBuilder: (context, index) {
-        final row = _controller.rowAt(index);
+        // The scrolling band starts after the frozen rows, so a list index
+        // is not a row index.
+        final rowIndex = index + indexOffset;
+        final row = _controller.rowAt(rowIndex);
         if (row == null) return const SizedBox.shrink();
         return _buildRow(
           row: row,
-          index: index,
+          index: rowIndex,
           columns: columns,
           isFirstPane: isFirstPane,
           theme: theme,
         );
       },
+    );
+  }
+
+  /// A frozen band: the same rows, laid out in a Column that cannot scroll.
+  Widget _buildFrozenBand({
+    required List<GridRow<T>> rows,
+    required int indexOffset,
+    required List<ColumnLayout<T>> columns,
+    required bool isFirstPane,
+    required LatticeGridTheme theme,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < rows.length; i++)
+          _buildRow(
+            row: rows[i],
+            index: indexOffset + i,
+            columns: columns,
+            isFirstPane: isFirstPane,
+            theme: theme,
+          ),
+      ],
     );
   }
 

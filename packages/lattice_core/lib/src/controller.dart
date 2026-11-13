@@ -33,6 +33,8 @@ class GridController<T> with GridChangeNotifier {
     Filter? filter,
     SelectionMode selectionMode = SelectionMode.multiRow,
     List<HeaderRow> stackedHeaders = const [],
+    int frozenRowCount = 0,
+    int frozenRowCountBottom = 0,
     int? pageSize,
     bool groupsExpandedByDefault = true,
     this.columnFit = ColumnFit.none,
@@ -43,6 +45,8 @@ class GridController<T> with GridChangeNotifier {
         _aggregations = List<Aggregation>.of(aggregations),
         _filter = filter,
         _stackedHeaders = List<HeaderRow>.of(stackedHeaders),
+        _frozenRowCount = frozenRowCount,
+        _frozenRowCountBottom = frozenRowCountBottom,
         _pageSize = pageSize,
         selection = SelectionState(mode: selectionMode),
         expansion =
@@ -66,6 +70,8 @@ class GridController<T> with GridChangeNotifier {
 
   final Map<String, double> _columnWidths = {};
   List<HeaderRow> _stackedHeaders;
+  int _frozenRowCount;
+  int _frozenRowCountBottom;
 
   GridResult<T>? _result;
   List<GridRow<T>> _visibleRows = const [];
@@ -516,6 +522,73 @@ class GridController<T> with GridChangeNotifier {
       selectCell(next);
     }
   }
+
+  // -- Frozen rows ----------------------------------------------------------
+
+  /// Rows pinned to the top of the viewport, taken from the start of
+  /// [visibleRows].
+  ///
+  /// Freezing is by position rather than by identity, which is what makes it
+  /// useful: pin two rows and sort, and the pinned rows are whatever now
+  /// sorts first. A row pinned by identity would instead jump around, which
+  /// is the opposite of what the name promises.
+  int get frozenRowCount => _frozenRowCount;
+
+  set frozenRowCount(int value) {
+    final clamped = value < 0 ? 0 : value;
+    if (clamped == _frozenRowCount) return;
+    _frozenRowCount = clamped;
+    notifyListeners();
+  }
+
+  /// Rows pinned to the bottom of the viewport, taken from the end of
+  /// [visibleRows]. A totals row usually lives here.
+  int get frozenRowCountBottom => _frozenRowCountBottom;
+
+  set frozenRowCountBottom(int value) {
+    final clamped = value < 0 ? 0 : value;
+    if (clamped == _frozenRowCountBottom) return;
+    _frozenRowCountBottom = clamped;
+    notifyListeners();
+  }
+
+  /// How many rows are actually frozen at the top, once the row count is
+  /// taken into account.
+  ///
+  /// Freezing more rows than exist would leave nothing to scroll, so the two
+  /// frozen bands together are capped at one row fewer than the grid has.
+  int get effectiveFrozenTop {
+    if (_frozenRowCount <= 0 || rowCount == 0) return 0;
+    return _frozenRowCount > rowCount - 1 ? rowCount - 1 : _frozenRowCount;
+  }
+
+  /// How many rows are actually frozen at the bottom. The top band wins when
+  /// the two would overlap, because it is the one the user is looking at.
+  int get effectiveFrozenBottom {
+    if (_frozenRowCountBottom <= 0 || rowCount == 0) return 0;
+    final room = rowCount - effectiveFrozenTop - 1;
+    if (room <= 0) return 0;
+    return _frozenRowCountBottom > room ? room : _frozenRowCountBottom;
+  }
+
+  /// The rows pinned to the top, in display order.
+  List<GridRow<T>> get frozenTopRows =>
+      _visibleRows.sublist(0, effectiveFrozenTop);
+
+  /// The rows pinned to the bottom, in display order.
+  List<GridRow<T>> get frozenBottomRows =>
+      _visibleRows.sublist(_visibleRows.length - effectiveFrozenBottom);
+
+  /// The rows that actually scroll, between the two frozen bands.
+  List<GridRow<T>> get scrollableRows => _visibleRows.sublist(
+        effectiveFrozenTop,
+        _visibleRows.length - effectiveFrozenBottom,
+      );
+
+  /// Whether the row at [index] in [visibleRows] is frozen.
+  bool isRowFrozen(int index) =>
+      index < effectiveFrozenTop ||
+      index >= _visibleRows.length - effectiveFrozenBottom;
 
   // -- Conditional formatting -----------------------------------------------
 
