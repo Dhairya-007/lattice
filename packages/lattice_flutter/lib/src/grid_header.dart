@@ -285,3 +285,81 @@ class _LatticeFilterCellState<T> extends State<LatticeFilterCell<T>> {
     );
   }
 }
+
+/// One row of a stacked header, drawn above the column titles.
+///
+/// Each band is drawn over whichever columns it currently covers, so a
+/// reorder, a hidden column or a frozen pane boundary changes the geometry
+/// without the band definition knowing anything about it.
+class LatticeStackedHeaderRow<T> extends StatelessWidget {
+  const LatticeStackedHeaderRow({
+    required this.row,
+    required this.columns,
+    required this.theme,
+    required this.height,
+    super.key,
+  });
+
+  final HeaderRow row;
+  final List<ColumnLayout<T>> columns;
+  final LatticeGridTheme theme;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final segments = layoutHeaderRow<T>(columns, row);
+    return SizedBox(
+      height: height,
+      child: Row(
+        children: [
+          for (final segment in segments)
+            SizedBox(
+              width: segment.width,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border(
+                    right: theme.showVerticalGridLines
+                        ? BorderSide(
+                            color: theme.gridLine,
+                            width: theme.gridLineWidth,
+                          )
+                        : BorderSide.none,
+                  ),
+                ),
+                child: segment.isGap || segment.isContinuation
+                    // A band split across panes repeats its geometry but not
+                    // its title, so the header does not read as two things.
+                    ? const SizedBox.shrink()
+                    : Padding(
+                        padding: theme.cellPadding,
+                        child: Align(
+                          alignment: _alignmentFor(segment.band!.align),
+                          child: Tooltip(
+                            message: segment.band!.tooltip ?? '',
+                            child: Text(
+                              segment.band!.title,
+                              style: theme.headerTextStyle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static Alignment _alignmentFor(ColumnAlign align) {
+    switch (align) {
+      case ColumnAlign.start:
+        return Alignment.centerLeft;
+      case ColumnAlign.center:
+        return Alignment.center;
+      case ColumnAlign.end:
+        return Alignment.centerRight;
+    }
+  }
+}

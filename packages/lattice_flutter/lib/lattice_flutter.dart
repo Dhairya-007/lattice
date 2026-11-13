@@ -26,7 +26,8 @@ export 'package:lattice_core/lattice_core.dart';
 
 export 'src/data_grid.dart';
 export 'src/grid_cell.dart' show GridCellBuilder, LatticeCell;
-export 'src/grid_header.dart' show LatticeFilterCell, LatticeHeaderCell;
+export 'src/grid_header.dart'
+    show LatticeFilterCell, LatticeHeaderCell, LatticeStackedHeaderRow;
 export 'src/group_row.dart' show LatticeGroupRowCells;
 export 'src/pager.dart' show LatticeGridFooter;
 export 'src/synced_scroll.dart' show SyncedScrollGroup;

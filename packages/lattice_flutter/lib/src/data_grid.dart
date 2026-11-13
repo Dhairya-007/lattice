@@ -343,6 +343,9 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (widget.showHeader)
+                for (final row in _controller.stackedHeaders)
+                  _buildStackedHeaderRow(row, layout, theme),
               if (widget.showHeader) _buildHeader(layout, theme),
               if (widget.showFilterRow) _buildFilterRow(layout, theme),
               Expanded(child: _buildBody(layout, theme)),
@@ -400,6 +403,40 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
             child: paneBuilder(layout.trailing, false),
           ),
       ],
+    );
+  }
+
+  /// One stacked header row, laid out across the same three panes as the
+  /// column titles below it.
+  Widget _buildStackedHeaderRow(
+    HeaderRow row,
+    GridLayout<T> layout,
+    LatticeGridTheme theme,
+  ) {
+    Widget cells(List<ColumnLayout<T>> columns, bool isFirstPane) {
+      return LatticeStackedHeaderRow<T>(
+        row: row,
+        columns: columns,
+        theme: theme,
+        height: theme.stackedHeaderHeight,
+      );
+    }
+
+    return Container(
+      height: theme.stackedHeaderHeight,
+      decoration: BoxDecoration(
+        color: theme.stackedHeaderBackground ?? theme.headerBackground,
+        border: Border(
+          bottom: BorderSide(color: theme.gridLine, width: theme.gridLineWidth),
+        ),
+      ),
+      child: _buildPanes(
+        layout: layout,
+        theme: theme,
+        horizontal: _hHeader,
+        paneBuilder: cells,
+        scrollingBuilder: cells,
+      ),
     );
   }
 
