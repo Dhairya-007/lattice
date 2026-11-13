@@ -1,12 +1,15 @@
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lattice_core/lattice_core.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'theme.dart';
 
 /// Builds the contents of a cell, replacing the default text.
-typedef GridCellBuilder<T> =
-    Widget Function(BuildContext context, GridColumn<T> column, T row);
+typedef GridCellBuilder<T> = Widget Function(
+  BuildContext context,
+  GridColumn<T> column,
+  T row,
+);
 
 /// One data cell.
 ///

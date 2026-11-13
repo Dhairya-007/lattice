@@ -1,7 +1,7 @@
 import 'dart:math';
 
-import 'package:flutter/material.dart';
 import 'package:lattice_flutter/lattice_flutter.dart';
+import 'package:material_ui/material_ui.dart';
 
 void main() => runApp(const LatticeExampleApp());
 
@@ -300,8 +300,9 @@ class _GridDemoPageState extends State<GridDemoPage> {
               autofocus: true,
               theme: LatticeGridTheme.of(context).copyWith(stripeRows: true),
               cellBuilder: (context, column, row) {
-                if (column.field == 'level')
+                if (column.field == 'level') {
                   return _LevelChip(level: row.level);
+                }
                 if (column.field == 'acknowledged') {
                   return Icon(
                     row.acknowledged ? Icons.check_circle : Icons.remove,

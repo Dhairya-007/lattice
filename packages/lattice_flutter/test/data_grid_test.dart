@@ -1,7 +1,7 @@
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lattice_flutter/lattice_flutter.dart';
+import 'package:material_ui/material_ui.dart';
 
 class Product {
   Product(this.name, this.category, this.price);
@@ -142,9 +142,8 @@ void main() {
     });
 
     testWidgets('respects an explicit theme', (tester) async {
-      final theme = LatticeGridTheme.fromTheme(
-        ThemeData.light(),
-      ).copyWith(rowHeight: 72, headerHeight: 80);
+      final theme = LatticeGridTheme.fromTheme(ThemeData.light())
+          .copyWith(rowHeight: 72, headerHeight: 80);
       await tester.pumpWidget(
         host(
           LatticeDataGrid<Product>(controller: makeController(), theme: theme),
