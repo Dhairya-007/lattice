@@ -382,26 +382,7 @@ Future<void> showColumnChooser<T>(
       title: const Text('Columns'),
       content: SizedBox(
         width: 320,
-        child: ListenableBuilder(
-          listenable: _ControllerListenable<T>(controller),
-          builder: (context, _) => ListView(
-            shrinkWrap: true,
-            children: [
-              for (final column in controller.columns)
-                SwitchListTile(
-                  dense: true,
-                  title: Text(column.title),
-                  value: column.visible,
-                  // The last visible column cannot be hidden: an empty grid
-                  // has no header to bring anything back from.
-                  onChanged:
-                      column.visible && controller.visibleColumns.length <= 1
-                      ? null
-                      : (on) => controller.setColumnVisible(column.field, on),
-                ),
-            ],
-          ),
-        ),
+        child: _ColumnChooserList<T>(controller: controller),
       ),
       actions: [
         TextButton(
@@ -413,18 +394,56 @@ Future<void> showColumnChooser<T>(
   );
 }
 
-/// Bridges the engine's listenable to Flutter's.
-class _ControllerListenable<T> extends ChangeNotifier {
-  _ControllerListenable(this._controller) {
-    _controller.addListener(notifyListeners);
-  }
+/// The list inside the chooser.
+///
+/// Stateful so it subscribes to the controller exactly once. Built inline it
+/// would add a listener on every rebuild, and since each listener triggers
+/// another rebuild, the subscriptions would multiply with every change.
+class _ColumnChooserList<T> extends StatefulWidget {
+  const _ColumnChooserList({required this.controller});
 
-  final GridController<T> _controller;
+  final GridController<T> controller;
+
+  @override
+  State<_ColumnChooserList<T>> createState() => _ColumnChooserListState<T>();
+}
+
+class _ColumnChooserListState<T> extends State<_ColumnChooserList<T>> {
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onChanged);
+  }
 
   @override
   void dispose() {
-    _controller.removeListener(notifyListeners);
+    widget.controller.removeListener(_onChanged);
     super.dispose();
+  }
+
+  void _onChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    return ListView(
+      shrinkWrap: true,
+      children: [
+        for (final column in controller.columns)
+          SwitchListTile(
+            dense: true,
+            title: Text(column.title),
+            value: column.visible,
+            // The last visible column cannot be hidden: an empty grid has no
+            // header left to bring anything back from.
+            onChanged: column.visible && controller.visibleColumns.length <= 1
+                ? null
+                : (on) => controller.setColumnVisible(column.field, on),
+          ),
+      ],
+    );
   }
 }
 
