@@ -43,6 +43,7 @@ class LatticeDataGrid<T> extends StatefulWidget {
     this.pageSizes = const [25, 50, 100, 250],
     this.autofocus = false,
     this.editOnDoubleTap = true,
+    this.showCheckboxColumn = false,
     this.stickyGroupHeaders = true,
     this.highlightChanges = false,
     this.rowId,
@@ -91,6 +92,13 @@ class LatticeDataGrid<T> extends StatefulWidget {
 
   /// Whether a double tap opens the editor on an editable cell.
   final bool editOnDoubleTap;
+
+  /// Shows a leading column of checkboxes, with a tri-state select-all
+  /// in the header.
+  ///
+  /// A checkbox is the only affordance that makes multi-selection
+  /// obvious on touch, where ctrl-click does not exist.
+  final bool showCheckboxColumn;
 
   /// Pins the current group's header to the top of the viewport while
   /// scrolling inside that group, so it is always clear which group the rows
