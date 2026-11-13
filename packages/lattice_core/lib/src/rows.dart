@@ -1,6 +1,8 @@
 /// The flat list of visual rows a UI adapter renders.
 library;
 
+import 'dart:collection';
+
 import 'aggregate.dart';
 import 'group.dart';
 
@@ -139,6 +141,43 @@ List<GridRow<T>> flattenGroups<T>(
 
   walk(nodes);
   return out;
+}
+
+/// A read-only row list that materialises each [DataGridRow] on demand.
+///
+/// An ungrouped grid of 50k rows would otherwise allocate 50k wrapper objects
+/// every time anything changed, which cost more than the sort that preceded
+/// it. Adapters only ever touch the rows in the viewport, so the wrappers are
+/// built as they are read.
+///
+/// Because a wrapper is created per read, two reads of the same index are
+/// equal in content but not identical. Compare [DataGridRow.data] or
+/// [GridRow.index] rather than identity.
+class LazyDataRowList<T> extends ListBase<GridRow<T>> {
+  LazyDataRowList(this._rows, {this.offset = 0});
+
+  final List<T> _rows;
+
+  /// Index of the first row in the unfiltered source, for remote paging.
+  final int offset;
+
+  @override
+  int get length => _rows.length;
+
+  @override
+  set length(int value) =>
+      throw UnsupportedError('The grid row list is read-only.');
+
+  @override
+  GridRow<T> operator [](int index) => DataGridRow<T>(
+        index: index,
+        data: _rows[index],
+        sourceIndex: offset + index,
+      );
+
+  @override
+  void operator []=(int index, GridRow<T> value) =>
+      throw UnsupportedError('The grid row list is read-only.');
 }
 
 /// Every group path in a tree, used by [GroupExpansionState.collapseAll].

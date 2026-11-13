@@ -234,14 +234,9 @@ class GridController<T> with GridChangeNotifier {
     _result = result;
     _visibleRows = result.isGrouped
         ? flattenGroups<T>(result.groups, expansion)
-        : [
-            for (var i = 0; i < result.rows.length; i++)
-              DataGridRow<T>(
-                index: i,
-                data: result.rows[i],
-                sourceIndex: query.offset + i,
-              ),
-          ];
+        // Lazy: an ungrouped 50k-row grid must not allocate 50k wrappers on
+        // every change. See [LazyDataRowList].
+        : LazyDataRowList<T>(result.rows, offset: query.offset);
     selection.clampTo(_visibleRows.length);
     notifyListeners();
   }
