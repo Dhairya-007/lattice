@@ -105,35 +105,44 @@ class _GroupLabel<T> extends StatelessWidget {
       onTap: () => controller.toggleGroup(row.path),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
+        // The tap is on the wrapper above; annotating here as well would
+        // leave a bare node in front of the label.
+        excludeFromSemantics: true,
         onTap: () => controller.toggleGroup(row.path),
         child: MouseRegion(
           cursor: SystemMouseCursors.click,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // A quarter turn rather than two icons, so the chevron animates
-              // in place when a group opens.
-              AnimatedRotation(
-                turns: row.expanded ? 0.25 : 0,
-                duration: const Duration(milliseconds: 120),
-                child: Icon(
-                  Icons.chevron_right,
-                  size: 18,
-                  color: theme.groupTextStyle.color,
+          // The chevron and the two Texts are all restated by the label
+          // above; kept in the tree they would own the nearest node and
+          // that label, with the count and the expansion state, would be
+          // lost.
+          child: ExcludeSemantics(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // A quarter turn rather than two icons, so the chevron animates
+                // in place when a group opens.
+                AnimatedRotation(
+                  turns: row.expanded ? 0.25 : 0,
+                  duration: const Duration(milliseconds: 120),
+                  child: Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: theme.groupTextStyle.color,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 2),
-              Flexible(
-                child: Text(
-                  '${column?.title ?? row.field}: ${row.label}',
-                  style: theme.groupTextStyle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                const SizedBox(width: 2),
+                Flexible(
+                  child: Text(
+                    '${column?.title ?? row.field}: ${row.label}',
+                    style: theme.groupTextStyle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              Text('(${row.rowCount})', style: theme.footerTextStyle),
-            ],
+                const SizedBox(width: 6),
+                Text('(${row.rowCount})', style: theme.footerTextStyle),
+              ],
+            ),
           ),
         ),
       ),
