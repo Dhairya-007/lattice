@@ -83,7 +83,8 @@ void main() {
     final node = nodeFor(tester, find.text('Price'));
     expect(node.hasFlag(SemanticsFlag.isHeader), isTrue);
     expect(node.hasFlag(SemanticsFlag.isButton), isTrue);
-    expect(node.hasAction(SemanticsAction.tap), isTrue);
+    // getSemanticsData exposes the actions; SemanticsNode has no hasAction.
+    expect(node.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
     handle.dispose();
   });
 
