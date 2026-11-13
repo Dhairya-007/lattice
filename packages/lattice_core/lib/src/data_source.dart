@@ -3,6 +3,7 @@ library;
 
 import 'aggregate.dart';
 import 'column.dart';
+import 'decoration.dart';
 import 'filter.dart';
 import 'group.dart';
 import 'notifier.dart';
@@ -46,6 +47,11 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
 
   /// Resolves [query].
   Future<GridResult<T>> fetch(GridQuery query);
+
+  /// Range of the values currently shown in [field], for conditional
+  /// formatting. Sources that cannot answer cheaply return
+  /// [ColumnStats.empty], which leaves rules inert rather than wrong.
+  ColumnStats statsFor(String field) => ColumnStats.empty;
 
   /// Tells the grid to re-run its current query, e.g. after a write.
   void invalidate() => notifyListeners();
@@ -246,6 +252,36 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     _matchedIndices = indices;
     _matchedRows = out;
     return out;
+  }
+
+  // -- Column statistics ----------------------------------------------------
+
+  String _statsKey = '';
+  final Map<String, ColumnStats> _stats = {};
+
+  /// Range of [field] across the rows that currently match.
+  ///
+  /// Computed over the matched set rather than every row, so a data bar is
+  /// drawn against what the user can actually see. Cached per revision and
+  /// per matched set, because a bar must not cost a column scan per frame.
+  @override
+  ColumnStats statsFor(String field) {
+    final key = '$revision\u0000$_matchedKey';
+    if (_statsKey != key) {
+      _stats.clear();
+      _statsKey = key;
+    }
+    final cached = _stats[field];
+    if (cached != null) return cached;
+    final column = columns[field];
+    final rows = _matchedRows.isEmpty && _matchedKey.isEmpty
+        ? _rows
+        : _matchedRows;
+    final stats = column == null
+        ? ColumnStats.empty
+        : computeColumnStats(rows.map(column.value));
+    _stats[field] = stats;
+    return stats;
   }
 
   // -- The search index -----------------------------------------------------
