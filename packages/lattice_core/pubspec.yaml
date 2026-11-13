@@ -4,6 +4,12 @@ version: 0.1.0
 repository: https://github.com/Dhairya-007/lattice
 issue_tracker: https://github.com/Dhairya-007/lattice/issues
 
+topics:
+  - datagrid
+  - table
+  - data-table
+  - grid
+
 environment:
   sdk: ^3.5.0
 
