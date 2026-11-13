@@ -5,11 +5,11 @@ import 'package:material_ui/material_ui.dart';
 import 'theme.dart';
 
 /// Builds the contents of a cell, replacing the default text.
-typedef GridCellBuilder<T> = Widget Function(
-  BuildContext context,
-  GridColumn<T> column,
-  T row,
-);
+///
+/// Takes the build context, the column being drawn and the row it is drawn
+/// from. Written on one line on purpose: formatter versions disagree about
+/// where to break a multi-line function type.
+typedef GridCellBuilder<T> = Widget Function(BuildContext, GridColumn<T>, T);
 
 /// One data cell.
 ///

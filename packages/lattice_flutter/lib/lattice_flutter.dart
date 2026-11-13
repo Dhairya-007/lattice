@@ -9,7 +9,11 @@
 /// final controller = GridController<Employee>(
 ///   columns: [
 ///     GridColumn(field: 'name', value: (e) => e.name, pin: ColumnPin.start),
-///     GridColumn(field: 'salary', type: ColumnType.number, value: (e) => e.salary),
+///     GridColumn(
+///       field: 'salary',
+///       type: ColumnType.number,
+///       value: (e) => e.salary,
+///     ),
 ///   ],
 ///   dataSource: InMemoryDataSource(employees),
 /// );
