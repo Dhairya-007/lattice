@@ -30,4 +30,4 @@ export 'src/grid_header.dart' show LatticeFilterCell, LatticeHeaderCell;
 export 'src/group_row.dart' show LatticeGroupRowCells;
 export 'src/pager.dart' show LatticeGridFooter;
 export 'src/synced_scroll.dart' show SyncedScrollGroup;
-export 'src/theme.dart' show LatticeGridTheme;
+export 'src/theme.dart' show GridDensity, LatticeGridTheme;
