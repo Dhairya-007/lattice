@@ -20,8 +20,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/anatomy-dark.svg"/>
-    <img alt="Anatomy of the Lattice data grid: frozen column, sortable header, filter row, group row with a subtotal, a selected range, a cell being edited with a validation error, virtualized rows and a summary footer" src="docs/anatomy-light.svg" width="100%"/>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/anatomy-dark.png"/>
+    <img alt="Anatomy of the Lattice data grid: frozen column, sortable header, filter row, group row with a subtotal, a selected range, a cell being edited with a validation error, virtualized rows and a summary footer" src="docs/anatomy-light.png" width="100%"/>
   </picture>
 </p>
 
