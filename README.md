@@ -71,6 +71,10 @@ LatticeDataGrid<Employee>(
 | **Editing** | validated sessions, inline errors, commit or roll back |
 | **Paging** | local or server-driven, with a summary footer |
 | **Export** | RFC 4180 CSV, grouped CSV, clipboard text |
+| **Conditional formatting** | data bars, colour scales, thresholds and value tones, decided in the engine |
+| **Sticky group headers** | the group you are inside stays named at the top while you scroll |
+| **Change flash** | a cell lights up when its value changes, for live feeds |
+| **Density** | compact, standard and comfortable, one setting |
 | **Theming** | follows the Material theme, light and dark, fully overridable |
 
 ## The architecture, and why it is like that
@@ -94,6 +98,31 @@ draw it, turn taps into controller calls.
 That split is also the plan for the web. An Angular or React adapter is a
 rendering layer over the same engine rather than a second implementation of
 every rule — which is the only way two front ends ever stay consistent.
+
+## Making it readable
+
+Conditional formatting is decided in the engine, because deciding that
+1 200 ms is *severe* — and that it fills 94% of a data bar — is a judgement
+about data, not about painting. What the engine does not decide is what severe
+*looks* like: rules emit a semantic tone, and the theme maps tone to colour,
+so one rule set reads correctly in light and dark.
+
+```dart
+GridColumn(
+  field: 'latencyMs',
+  type: ColumnType.number,
+  value: (r) => r.latencyMs,
+  rule: const MergedRule([
+    DataBarRule(),
+    ThresholdRule(threshold: 1000, tone: CellTone.severe, bold: true),
+  ]),
+)
+```
+
+The statistics a data bar needs — the column's range — are computed over the
+rows that currently match, so bars rescale when a filter changes what is on
+screen, and they are cached alongside the pipeline so scrolling never costs a
+column scan.
 
 ## Data sources
 
@@ -187,13 +216,24 @@ Everything except a large sort fits inside a 16.7 ms frame at 50k rows.
 Pre-1.0, and honest about it:
 
 - [x] Engine: sorting, filtering, grouping, aggregates, selection, editing,
-      virtualization, export — 250 unit tests
+      virtualization, export — 320 unit tests
 - [x] Flutter adapter: frozen columns, virtualized rows, inline editing,
-      keyboard navigation — 30 widget tests
-- [ ] Measured performance work for 10k–50k row datasets
+      keyboard navigation — 46 widget tests
+- [x] Measured performance at 10k–50k rows: everything but a large sort fits
+      in a frame
+- [x] Visual layer: conditional formatting, density, sticky group headers,
+      change flash
+- [x] CSV exports hardened against formula injection
 - [ ] Richer filter UI: per-column operator menus and a condition builder
+      ([#10](https://github.com/Dhairya-007/lattice/issues/10))
 - [ ] Column menu: show, hide, pin and reorder from the header
-- [ ] Excel and PDF export
+      ([#9](https://github.com/Dhairya-007/lattice/issues/9))
+- [ ] Excel export ([#11](https://github.com/Dhairya-007/lattice/issues/11))
+- [ ] Accessibility semantics
+      ([#13](https://github.com/Dhairya-007/lattice/issues/13))
+- [ ] Row detail panels
+      ([#14](https://github.com/Dhairya-007/lattice/issues/14))
+- [ ] Tree data ([#15](https://github.com/Dhairya-007/lattice/issues/15))
 - [ ] Angular adapter
 - [ ] React adapter
 
