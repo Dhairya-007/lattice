@@ -1,3 +1,4 @@
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:lattice_core/lattice_core.dart';
 import 'package:material_ui/material_ui.dart';
@@ -122,55 +123,85 @@ class LatticeCell<T> extends StatelessWidget {
     final tint = isEditing ? null : theme.backgroundFor(decoration);
     final bar = isEditing ? null : decoration.bar;
 
-    return SizedBox(
-      width: width,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: isSelected && !isEditing ? theme.selectedCellBackground : tint,
-          border: Border(
-            right: theme.showVerticalGridLines && !isLastInPane
-                ? BorderSide(color: theme.gridLine, width: theme.gridLineWidth)
-                : BorderSide.none,
+    // What a screen reader says for this cell. Without the column title a
+    // value is meaningless out of context, and without the row number the
+    // listener cannot tell which record they are on.
+    final semanticLabel =
+        'Row ${address.row + 1}, ${column.title}'
+        '${isSelected ? ', selected' : ''}';
+
+    return Semantics(
+      label: semanticLabel,
+      value: text,
+      selected: isSelected,
+      focused: isActive,
+      textField: isEditing,
+      readOnly: !column.editable,
+      // Traversal follows the columns rather than the widget tree, which
+      // frozen panes would otherwise scramble.
+      sortKey: OrdinalSortKey(address.row * 1000 + width),
+      child: SizedBox(
+        width: width,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: isSelected && !isEditing
+                ? theme.selectedCellBackground
+                : tint,
+            border: Border(
+              right: theme.showVerticalGridLines && !isLastInPane
+                  ? BorderSide(
+                      color: theme.gridLine,
+                      width: theme.gridLineWidth,
+                    )
+                  : BorderSide.none,
+            ),
           ),
-        ),
-        child: Container(
-          foregroundDecoration: isActive && !isEditing
-              ? BoxDecoration(
-                  border: Border.all(color: theme.focusedCellBorder, width: 2),
-                )
-              : null,
-          padding: theme.cellPadding,
-          alignment: _alignmentFor(column.effectiveAlign),
-          // The bar sits behind the text rather than beside it, so adding
-          // one never costs the value any room.
-          child: bar == null
-              ? content
-              : Stack(
-                  fit: StackFit.passthrough,
-                  children: [
-                    Positioned.fill(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: FractionallySizedBox(
-                          widthFactor: bar,
-                          heightFactor: 0.62,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: theme
-                                  .toneColor(decoration.tone)
-                                  .withValues(alpha: theme.dataBarOpacity),
-                              borderRadius: BorderRadius.circular(2),
+          child: Container(
+            foregroundDecoration: isActive && !isEditing
+                ? BoxDecoration(
+                    border: Border.all(
+                      color: theme.focusedCellBorder,
+                      width: 2,
+                    ),
+                  )
+                : null,
+            padding: theme.cellPadding,
+            alignment: _alignmentFor(column.effectiveAlign),
+            // The bar sits behind the text rather than beside it, so adding
+            // one never costs the value any room.
+            // The bar is decoration for the value beside it; announcing it
+            // would just be noise.
+            child: bar == null
+                ? content
+                : Stack(
+                    fit: StackFit.passthrough,
+                    children: [
+                      Positioned.fill(
+                        child: ExcludeSemantics(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: FractionallySizedBox(
+                              widthFactor: bar,
+                              heightFactor: 0.62,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: theme
+                                      .toneColor(decoration.tone)
+                                      .withValues(alpha: theme.dataBarOpacity),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                    Align(
-                      alignment: _alignmentFor(column.effectiveAlign),
-                      child: content,
-                    ),
-                  ],
-                ),
+                      Align(
+                        alignment: _alignmentFor(column.effectiveAlign),
+                        child: content,
+                      ),
+                    ],
+                  ),
+          ),
         ),
       ),
     );
@@ -226,9 +257,22 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
     super.dispose();
   }
 
+  String? _announcedError;
+
   void _commit() {
     widget.controller.updateEdit(coerceValue(_text.text, widget.column.type));
-    widget.controller.commitEdit();
+    final result = widget.controller.commitEdit();
+    // A rejected edit keeps the editor open with a red border, which says
+    // nothing to a screen reader; the message has to be announced.
+    if (result.isRejected && result.error != null) {
+      _announce(result.error!);
+    }
+  }
+
+  void _announce(String message) {
+    if (_announcedError == message) return;
+    _announcedError = message;
+    SemanticsService.announce(message, Directionality.of(context));
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -249,51 +293,67 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
   Widget build(BuildContext context) {
     final error = widget.controller.editSession?.error;
     final theme = widget.theme;
+    if (error != null) {
+      // Also announce an error that appeared while typing, not only on a
+      // rejected commit.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _announce(error);
+      });
+    } else {
+      _announcedError = null;
+    }
+
     return Focus(
       onKeyEvent: _onKey,
-      child: Tooltip(
-        message: error ?? '',
-        // An empty message renders nothing, so a valid edit shows no tooltip.
-        child: TextField(
-          controller: _text,
-          focusNode: _focus,
-          style: theme.cellTextStyle,
-          textAlign: LatticeCell._textAlignFor(widget.column.effectiveAlign),
-          keyboardType: widget.column.type == ColumnType.number
-              ? const TextInputType.numberWithOptions(
-                  decimal: true,
-                  signed: true,
-                )
-              : TextInputType.text,
-          decoration: InputDecoration(
-            isDense: true,
-            filled: true,
-            fillColor: Theme.of(context).colorScheme.surface,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 6,
-              vertical: 8,
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(
-                color: error == null
-                    ? theme.focusedCellBorder
-                    : theme.errorColor,
-                width: 2,
+      child: Semantics(
+        label: '${widget.column.title} editor',
+        textField: true,
+        liveRegion: error != null,
+        value: error ?? _text.text,
+        child: Tooltip(
+          message: error ?? '',
+          // An empty message renders nothing, so a valid edit shows no tooltip.
+          child: TextField(
+            controller: _text,
+            focusNode: _focus,
+            style: theme.cellTextStyle,
+            textAlign: LatticeCell._textAlignFor(widget.column.effectiveAlign),
+            keyboardType: widget.column.type == ColumnType.number
+                ? const TextInputType.numberWithOptions(
+                    decimal: true,
+                    signed: true,
+                  )
+                : TextInputType.text,
+            decoration: InputDecoration(
+              isDense: true,
+              filled: true,
+              fillColor: Theme.of(context).colorScheme.surface,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 6,
+                vertical: 8,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(
+                  color: error == null
+                      ? theme.focusedCellBorder
+                      : theme.errorColor,
+                  width: 2,
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderSide: BorderSide(
+                  color: error == null
+                      ? theme.focusedCellBorder
+                      : theme.errorColor,
+                  width: 2,
+                ),
               ),
             ),
-            focusedBorder: OutlineInputBorder(
-              borderSide: BorderSide(
-                color: error == null
-                    ? theme.focusedCellBorder
-                    : theme.errorColor,
-                width: 2,
-              ),
+            onChanged: (text) => widget.controller.updateEdit(
+              coerceValue(text, widget.column.type),
             ),
+            onSubmitted: (_) => _commit(),
           ),
-          onChanged: (text) => widget.controller.updateEdit(
-            coerceValue(text, widget.column.type),
-          ),
-          onSubmitted: (_) => _commit(),
         ),
       ),
     );

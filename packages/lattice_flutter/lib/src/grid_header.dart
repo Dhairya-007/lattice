@@ -159,34 +159,51 @@ class LatticeHeaderCell<T> extends StatelessWidget {
       );
     }
 
-    return SizedBox(
-      width: width,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border(
-            right: theme.showVerticalGridLines && !isLastInPane
-                ? BorderSide(color: theme.gridLine, width: theme.gridLineWidth)
-                : BorderSide.none,
+    // The sort state has to be spoken, not just drawn: an arrow is invisible
+    // to a screen reader, and the sort level matters once there are several.
+    final sortSpoken = sort == null
+        ? ''
+        : ', sorted ${sort.isAscending ? 'ascending' : 'descending'}'
+              '${showPriority ? ', sort level $priority' : ''}';
+
+    return Semantics(
+      header: true,
+      button: column.sortable,
+      label: '${column.title}$sortSpoken',
+      hint: column.sortable ? 'Activate to change the sort' : null,
+      onTap: column.sortable ? _onTap : null,
+      child: SizedBox(
+        width: width,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border(
+              right: theme.showVerticalGridLines && !isLastInPane
+                  ? BorderSide(
+                      color: theme.gridLine,
+                      width: theme.gridLineWidth,
+                    )
+                  : BorderSide.none,
+            ),
           ),
-        ),
-        child: Stack(
-          fit: StackFit.passthrough,
-          children: [
-            content,
-            if (column.resizable)
-              Positioned(
-                top: 0,
-                bottom: 0,
-                right: -theme.resizeHandleWidth / 2,
-                width: theme.resizeHandleWidth,
-                child: _ResizeHandle<T>(
-                  controller: controller,
-                  column: column,
-                  startWidth: width,
-                  theme: theme,
+          child: Stack(
+            fit: StackFit.passthrough,
+            children: [
+              content,
+              if (column.resizable)
+                Positioned(
+                  top: 0,
+                  bottom: 0,
+                  right: -theme.resizeHandleWidth / 2,
+                  width: theme.resizeHandleWidth,
+                  child: _ResizeHandle<T>(
+                    controller: controller,
+                    column: column,
+                    startWidth: width,
+                    theme: theme,
+                  ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -613,34 +630,41 @@ class _LatticeFilterCellState<T> extends State<LatticeFilterCell<T>> {
           ),
         ),
         child: widget.column.filterable
-            ? Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                child: TextField(
-                  controller: _text,
-                  style: theme.cellTextStyle,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    hintText: 'Filter',
-                    hintStyle: theme.footerTextStyle,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 6,
-                    ),
-                    border: const OutlineInputBorder(),
-                    suffixIcon: _text.text.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.close, size: 14),
-                            onPressed: () {
-                              _text.clear();
-                              _apply('');
-                            },
-                          ),
+            ? Semantics(
+                label: 'Filter ${widget.column.title}',
+                textField: true,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 4,
                   ),
-                  onChanged: (value) {
-                    _apply(value);
-                    setState(() {}); // refresh the clear button
-                  },
+                  child: TextField(
+                    controller: _text,
+                    style: theme.cellTextStyle,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: 'Filter',
+                      hintStyle: theme.footerTextStyle,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      border: const OutlineInputBorder(),
+                      suffixIcon: _text.text.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.close, size: 14),
+                              onPressed: () {
+                                _text.clear();
+                                _apply('');
+                              },
+                            ),
+                    ),
+                    onChanged: (value) {
+                      _apply(value);
+                      setState(() {}); // refresh the clear button
+                    },
+                  ),
                 ),
               )
             : const SizedBox.shrink(),

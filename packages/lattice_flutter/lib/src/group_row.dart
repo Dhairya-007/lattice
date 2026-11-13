@@ -94,37 +94,47 @@ class _GroupLabel<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final column = controller.column(row.field);
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
+    return Semantics(
+      // Expansion and the row count are the two things a listener needs and
+      // the chevron alone cannot give them.
+      label:
+          '${column?.title ?? row.field} ${row.label}, '
+          '${row.rowCount} rows, ${row.expanded ? 'expanded' : 'collapsed'}',
+      button: true,
+      hint: row.expanded ? 'Activate to collapse' : 'Activate to expand',
       onTap: () => controller.toggleGroup(row.path),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // A quarter turn rather than two icons, so the chevron animates
-            // in place when a group opens.
-            AnimatedRotation(
-              turns: row.expanded ? 0.25 : 0,
-              duration: const Duration(milliseconds: 120),
-              child: Icon(
-                Icons.chevron_right,
-                size: 18,
-                color: theme.groupTextStyle.color,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => controller.toggleGroup(row.path),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // A quarter turn rather than two icons, so the chevron animates
+              // in place when a group opens.
+              AnimatedRotation(
+                turns: row.expanded ? 0.25 : 0,
+                duration: const Duration(milliseconds: 120),
+                child: Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: theme.groupTextStyle.color,
+                ),
               ),
-            ),
-            const SizedBox(width: 2),
-            Flexible(
-              child: Text(
-                '${column?.title ?? row.field}: ${row.label}',
-                style: theme.groupTextStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              const SizedBox(width: 2),
+              Flexible(
+                child: Text(
+                  '${column?.title ?? row.field}: ${row.label}',
+                  style: theme.groupTextStyle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-            const SizedBox(width: 6),
-            Text('(${row.rowCount})', style: theme.footerTextStyle),
-          ],
+              const SizedBox(width: 6),
+              Text('(${row.rowCount})', style: theme.footerTextStyle),
+            ],
+          ),
         ),
       ),
     );
