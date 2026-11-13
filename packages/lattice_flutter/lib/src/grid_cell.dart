@@ -282,57 +282,64 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
     final theme = widget.theme;
     return Focus(
       onKeyEvent: _onKey,
-      child: Semantics(
-        label: '${widget.column.title} editor',
-        textField: true,
-        // A live region is announced when its value changes, which covers
-        // the error appearing without reaching for SemanticsService - whose
-        // announce is deprecated for being single-window.
-        liveRegion: error != null,
-        value: error ?? _text.text,
-        child: Tooltip(
-          message: error ?? '',
-          // An empty message renders nothing, so a valid edit shows no tooltip.
-          child: TextField(
-            controller: _text,
-            focusNode: _focus,
-            style: theme.cellTextStyle,
-            textAlign: LatticeCell._textAlignFor(widget.column.effectiveAlign),
-            keyboardType: widget.column.type == ColumnType.number
-                ? const TextInputType.numberWithOptions(
-                    decimal: true,
-                    signed: true,
-                  )
-                : TextInputType.text,
-            decoration: InputDecoration(
-              isDense: true,
-              filled: true,
-              fillColor: Theme.of(context).colorScheme.surface,
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 6,
-                vertical: 8,
+      // Merged, so the field is one node: the TextField makes a node of its
+      // own, and without the merge it is that node a screen reader reaches,
+      // not the label, value and live region set here.
+      child: MergeSemantics(
+        child: Semantics(
+          label: '${widget.column.title} editor',
+          textField: true,
+          // A live region is announced when its value changes, which covers
+          // the error appearing without reaching for SemanticsService - whose
+          // announce is deprecated for being single-window.
+          liveRegion: error != null,
+          value: error ?? _text.text,
+          child: Tooltip(
+            message: error ?? '',
+            // An empty message renders nothing, so a valid edit shows no tooltip.
+            child: TextField(
+              controller: _text,
+              focusNode: _focus,
+              style: theme.cellTextStyle,
+              textAlign: LatticeCell._textAlignFor(
+                widget.column.effectiveAlign,
               ),
-              enabledBorder: OutlineInputBorder(
-                borderSide: BorderSide(
-                  color: error == null
-                      ? theme.focusedCellBorder
-                      : theme.errorColor,
-                  width: 2,
+              keyboardType: widget.column.type == ColumnType.number
+                  ? const TextInputType.numberWithOptions(
+                      decimal: true,
+                      signed: true,
+                    )
+                  : TextInputType.text,
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: Theme.of(context).colorScheme.surface,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 8,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(
+                    color: error == null
+                        ? theme.focusedCellBorder
+                        : theme.errorColor,
+                    width: 2,
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(
+                    color: error == null
+                        ? theme.focusedCellBorder
+                        : theme.errorColor,
+                    width: 2,
+                  ),
                 ),
               ),
-              focusedBorder: OutlineInputBorder(
-                borderSide: BorderSide(
-                  color: error == null
-                      ? theme.focusedCellBorder
-                      : theme.errorColor,
-                  width: 2,
-                ),
+              onChanged: (text) => widget.controller.updateEdit(
+                coerceValue(text, widget.column.type),
               ),
+              onSubmitted: (_) => _commit(),
             ),
-            onChanged: (text) => widget.controller.updateEdit(
-              coerceValue(text, widget.column.type),
-            ),
-            onSubmitted: (_) => _commit(),
           ),
         ),
       ),
