@@ -45,6 +45,7 @@ class LatticeGridTheme {
     this.headerHeight = 44,
     this.stackedHeaderHeight = 36,
     this.stackedHeaderBackground,
+    this.frozenRowBackground,
     this.filterRowHeight = 40,
     this.footerHeight = 48,
     this.cellPadding = const EdgeInsets.symmetric(horizontal: 12),
@@ -203,6 +204,11 @@ class LatticeGridTheme {
 
   /// Background for stacked header rows; defaults to [headerBackground].
   final Color? stackedHeaderBackground;
+
+  /// Background behind rows frozen to the top or bottom; defaults to
+  /// [headerBackground], which is what makes them read as pinned rather than
+  /// as ordinary rows that happen not to move.
+  final Color? frozenRowBackground;
   final double filterRowHeight;
   final double footerHeight;
   final EdgeInsets cellPadding;
@@ -278,6 +284,7 @@ class LatticeGridTheme {
     double? headerHeight,
     double? stackedHeaderHeight,
     Color? stackedHeaderBackground,
+    Color? frozenRowBackground,
     double? filterRowHeight,
     double? footerHeight,
     EdgeInsets? cellPadding,
@@ -318,6 +325,7 @@ class LatticeGridTheme {
       stackedHeaderHeight: stackedHeaderHeight ?? this.stackedHeaderHeight,
       stackedHeaderBackground:
           stackedHeaderBackground ?? this.stackedHeaderBackground,
+      frozenRowBackground: frozenRowBackground ?? this.frozenRowBackground,
       filterRowHeight: filterRowHeight ?? this.filterRowHeight,
       footerHeight: footerHeight ?? this.footerHeight,
       cellPadding: cellPadding ?? this.cellPadding,
