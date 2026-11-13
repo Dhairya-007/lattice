@@ -17,12 +17,9 @@ Future<void> openMenu(WidgetTester tester, String title) async {
     of: find.text(title),
     matching: find.byType(LatticeHeaderCell<Product>),
   );
+  // By icon: the menu's value type is private, so byType cannot name it.
   await tester.tap(
-    find.descendant(
-      of: header,
-      matching: find.byType(PopupMenuButton<Object?>),
-    ),
-    warnIfMissed: false,
+    find.descendant(of: header, matching: find.byIcon(Icons.more_vert_rounded)),
   );
   await tester.pumpAndSettle();
 }
