@@ -20,8 +20,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/anatomy-dark.svg"/>
-    <img alt="Anatomy of the Lattice data grid: frozen column, sortable header, filter row, group row with a subtotal, a selected range, a cell being edited with a validation error, virtualized rows and a summary footer" src="docs/anatomy-light.svg" width="100%"/>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/anatomy-dark.png"/>
+    <img alt="Anatomy of the Lattice data grid: frozen column, sortable header, filter row, group row with a subtotal, a selected range, a cell being edited with a validation error, virtualized rows and a summary footer" src="docs/anatomy-light.png" width="100%"/>
   </picture>
 </p>
 
@@ -63,19 +63,30 @@ LatticeDataGrid<Employee>(
 | --- | --- |
 | **Sorting** | multi-column, stable, custom comparators, explicit null placement |
 | **Filtering** | 16 operators, a serialisable condition tree, free-text search, a filter row |
-| **Grouping** | nested levels, derived keys, per-group aggregates, collapsible headers |
+| **Grouping** | nested levels, derived keys, per-group aggregates, collapsible headers, server-side |
+| **Tree data** | parent/child rows, from a nested model or a parent reference |
 | **Aggregates** | sum, average, min, max, count, distinct count, custom reducers |
-| **Frozen columns** | leading and trailing panes, locked to the body's scroll |
+| **Frozen columns and rows** | leading and trailing panes, plus rows pinned to the top and bottom |
+| **Stacked headers** | header rows spanning several columns, following reorders and hidden columns |
+| **Column menu** | sort, pin, hide, reset width, drag to reorder, and a chooser to bring columns back |
 | **Virtualization** | uniform and variable row heights, plus column windowing for wide grids |
-| **Selection** | rows, cells, rectangular ranges, full keyboard navigation, TSV copy |
-| **Editing** | validated sessions, inline errors, commit or roll back |
+| **Selection** | rows, cells, rectangular ranges, a tri-state checkbox column, keyboard navigation, TSV copy |
+| **Editing** | validated sessions, inline errors, optimistic writes, paste into a range, undo/redo |
 | **Paging** | local or server-driven, with a summary footer |
 | **Export** | RFC 4180 CSV, grouped CSV, clipboard text |
+| **Saved views** | the whole arrangement - query, column order, widths, pins - as JSON |
 | **Conditional formatting** | data bars, colour scales, thresholds and value tones, decided in the engine |
 | **Sticky group headers** | the group you are inside stays named at the top while you scroll |
 | **Change flash** | a cell lights up when its value changes, for live feeds |
 | **Density** | compact, standard and comfortable, one setting |
 | **Theming** | follows the Material theme, light and dark, fully overridable |
+
+```yaml
+dependencies:
+  lattice_flutter: ^0.1.0   # the widgets
+  # or, for the engine alone, with no Flutter:
+  lattice_core: ^0.2.0
+```
 
 ## The architecture, and why it is like that
 
@@ -216,24 +227,31 @@ Everything except a large sort fits inside a 16.7 ms frame at 50k rows.
 Pre-1.0, and honest about it:
 
 - [x] Engine: sorting, filtering, grouping, aggregates, selection, editing,
-      virtualization, export — 320 unit tests
-- [x] Flutter adapter: frozen columns, virtualized rows, inline editing,
-      keyboard navigation — 46 widget tests
+      virtualization, export — 370 unit tests
+- [x] Flutter adapter: frozen panes, virtualized rows, inline editing,
+      keyboard navigation — 95 widget tests
 - [x] Measured performance at 10k–50k rows: everything but a large sort fits
       in a frame
 - [x] Visual layer: conditional formatting, density, sticky group headers,
       change flash
 - [x] CSV exports hardened against formula injection
+- [x] Stacked headers, frozen rows, checkbox selection — the Syncfusion
+      features that were missing
+- [x] Column menu: sort, pin, hide, reorder, choose columns
+- [x] Screen reader semantics
 - [ ] Richer filter UI: per-column operator menus and a condition builder
       ([#10](https://github.com/Dhairya-007/lattice/issues/10))
-- [ ] Column menu: show, hide, pin and reorder from the header
-      ([#9](https://github.com/Dhairya-007/lattice/issues/9))
 - [ ] Excel export ([#11](https://github.com/Dhairya-007/lattice/issues/11))
-- [ ] Accessibility semantics
-      ([#13](https://github.com/Dhairya-007/lattice/issues/13))
 - [ ] Row detail panels
       ([#14](https://github.com/Dhairya-007/lattice/issues/14))
 - [ ] Tree data ([#15](https://github.com/Dhairya-007/lattice/issues/15))
+- [ ] Swipe actions ([#24](https://github.com/Dhairya-007/lattice/issues/24)),
+      pull to refresh and load more
+      ([#25](https://github.com/Dhairya-007/lattice/issues/25))
+- [ ] RTL ([#26](https://github.com/Dhairya-007/lattice/issues/26)),
+      auto-fit column widths
+      ([#27](https://github.com/Dhairya-007/lattice/issues/27)),
+      localization ([#28](https://github.com/Dhairya-007/lattice/issues/28))
 - [ ] Angular adapter
 - [ ] React adapter
 

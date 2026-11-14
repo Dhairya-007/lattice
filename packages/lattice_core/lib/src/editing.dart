@@ -42,7 +42,14 @@ class EditSession<T> {
   })  : _value = initialValue,
         originalValue = initialValue;
 
-  final CellAddress cell;
+  /// The cell being edited.
+  ///
+  /// Not final: the row the user is editing can change position under them -
+  /// a background refresh, or another sort - and the session has to follow it
+  /// rather than keep pointing at a row index that now holds something else.
+  /// See [relocate].
+  CellAddress cell;
+
   final GridColumn<T> column;
 
   /// The row being edited.
@@ -63,6 +70,13 @@ class EditSession<T> {
   bool get isValid => _error == null;
 
   bool get isDirty => _value != originalValue;
+
+  /// Points this session at [rowIndex], keeping its column and its half-typed
+  /// value. Called when the edited row moves to a new position.
+  void relocate(int rowIndex) {
+    if (rowIndex == cell.row) return;
+    cell = CellAddress(rowIndex, cell.field);
+  }
 
   /// Updates the candidate value and re-runs validation.
   ///

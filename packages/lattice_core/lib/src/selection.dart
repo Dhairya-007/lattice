@@ -138,6 +138,11 @@ class SelectionState {
   /// The current rectangular range, when [SelectionMode.cellRange] is active.
   CellRange? get range => _range;
 
+  /// Where the last shift-extendable gesture started.
+  ///
+  /// Row anchors carry an empty field, because a row click has no column.
+  CellAddress? get anchor => _anchor;
+
   bool get isEmpty => _rows.isEmpty && _activeCell == null;
 
   int get rowCount => _rows.length;
@@ -244,6 +249,48 @@ class SelectionState {
     _activeCell = null;
     _anchor = null;
     _range = null;
+  }
+
+  /// Rewrites every row index through [moved], dropping the ones it maps to
+  /// null or outside [rowCount].
+  ///
+  /// A selection is stored as indices because that is what an adapter renders,
+  /// which means it otherwise follows the screen position rather than the row:
+  /// select a row, sort, and the selection is on whatever now sits there.
+  /// Given a way to recognise a row - see `GridController.rowKey` - the
+  /// controller calls this after every rebuild so the selection follows the
+  /// rows instead.
+  ///
+  /// A range is remapped by its two ends. After a reorder the cells between
+  /// them are not the cells that were between them before; following the
+  /// anchor and the focus is the only rule that keeps a rectangle a rectangle.
+  void remapRows(int? Function(int index) moved, {required int rowCount}) {
+    final rows = <int>{};
+    for (final index in _rows) {
+      final next = moved(index);
+      if (next != null && next >= 0 && next < rowCount) rows.add(next);
+    }
+    _rows
+      ..clear()
+      ..addAll(rows);
+
+    CellAddress? remap(CellAddress? cell) {
+      if (cell == null) return null;
+      final next = moved(cell.row);
+      if (next == null || next < 0 || next >= rowCount) return null;
+      return next == cell.row ? cell : CellAddress(next, cell.field);
+    }
+
+    _activeCell = remap(_activeCell);
+    _anchor = remap(_anchor);
+    final range = _range;
+    if (range != null) {
+      final anchor = remap(range.anchor);
+      final focus = remap(range.focus);
+      _range = anchor == null || focus == null
+          ? null
+          : CellRange(anchor: anchor, focus: focus, fields: range.fields);
+    }
   }
 
   /// Keeps the selection meaningful after the row count changes, dropping

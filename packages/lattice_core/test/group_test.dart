@@ -259,4 +259,63 @@ void main() {
       expect(collectGroupPaths(twoLevels()).length, 3 + 4);
     });
   });
+
+  group('regrouping the same field', () {
+    test(
+        'a different keyOf rebuilds the buckets instead of serving the old '
+        'ones', () {
+      final grid = productGrid(groups: [
+        GroupSpec('price', keyOf: (v) => (v as num) > 100 ? 'big' : 'small'),
+      ]);
+      expect(
+        [
+          for (final row in grid.visibleRows)
+            if (row is GroupGridRow<Product>) row.label,
+        ],
+        ['big', 'small'],
+      );
+
+      grid.setGroups([
+        GroupSpec('price', keyOf: (v) => (v as num) % 2 == 0 ? 'even' : 'odd'),
+      ]);
+      expect(
+        [
+          for (final row in grid.visibleRows)
+            if (row is GroupGridRow<Product>) row.label,
+        ],
+        ['even', 'odd'],
+      );
+    });
+
+    test('a different labelOf relabels the same buckets', () {
+      final grid = productGrid(groups: [const GroupSpec('category')]);
+      grid.setGroups([
+        GroupSpec('category', labelOf: (k) => '$k group'),
+      ]);
+      expect(
+        [
+          for (final row in grid.visibleRows)
+            if (row is GroupGridRow<Product>) row.label,
+        ],
+        ['Compute group', 'Display group', 'Input group'],
+      );
+    });
+
+    test('a spec rebuilt with an equal closure still hits the cache', () {
+      GroupSpec spec() => GroupSpec('category', labelOf: labelUpper);
+      expect(spec().fingerprint, spec().fingerprint);
+      expect(spec(), spec());
+    });
+
+    test('specs differing only in keyOf are not equal', () {
+      expect(
+        GroupSpec('price', keyOf: keyBig) == GroupSpec('price', keyOf: keyEven),
+        isFalse,
+      );
+    });
+  });
 }
+
+String labelUpper(Object? key) => '$key'.toUpperCase();
+Object? keyBig(Object? value) => (value as num) > 100;
+Object? keyEven(Object? value) => (value as num) % 2 == 0;

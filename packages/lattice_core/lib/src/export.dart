@@ -218,6 +218,30 @@ class CsvExporter<T> {
       options.delimiter.isEmpty ? -1 : options.delimiter.codeUnitAt(0);
 }
 
+/// Splits clipboard text back into a grid of cells: the inverse of
+/// [toClipboardText].
+///
+/// Accepts the three line endings a clipboard can carry, because the text may
+/// have come from any application on any platform. A trailing newline does
+/// not produce an empty last row - spreadsheets add one - but an empty line
+/// in the middle does, since that is a row of blanks the user copied.
+///
+/// Quoting is not interpreted. Spreadsheets hand over tab-separated text with
+/// literal values, and guessing at quotes would mangle a value that is meant
+/// to contain one.
+List<List<String>> parseClipboardText(String text, {String delimiter = '\t'}) {
+  if (text.isEmpty) return const [];
+  final body = text.endsWith('\r\n')
+      ? text.substring(0, text.length - 2)
+      : (text.endsWith('\n') || text.endsWith('\r')
+          ? text.substring(0, text.length - 1)
+          : text);
+  if (body.isEmpty) return const [];
+  return [
+    for (final line in body.split(RegExp(r'\r\n|\r|\n'))) line.split(delimiter),
+  ];
+}
+
 /// Serialises a cell range as tab-separated text, the format spreadsheets and
 /// most editors accept from the clipboard.
 ///

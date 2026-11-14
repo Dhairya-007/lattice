@@ -80,11 +80,11 @@ void main() {
   ) async {
     final handle = tester.ensureSemantics();
     await tester.pumpWidget(host(LatticeDataGrid<Product>(controller: make())));
-    // containsSemantics checks only what it is given, and avoids the
+    // isSemantics checks only what it is given, and avoids the
     // deprecated flag accessors.
     expect(
       nodeFor(tester, find.text('Price')),
-      containsSemantics(isHeader: true, isButton: true, hasTapAction: true),
+      isSemantics(isHeader: true, isButton: true, hasTapAction: true),
     );
     handle.dispose();
   });
@@ -139,7 +139,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       tester.getSemantics(find.byType(TextField)),
-      containsSemantics(value: 'Required', isLiveRegion: true),
+      isSemantics(value: 'Required', isLiveRegion: true),
     );
     handle.dispose();
   });

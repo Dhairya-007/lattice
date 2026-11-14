@@ -348,6 +348,24 @@ void main() {
           isFalse);
     });
 
+    test('pinning changes the order fields are reported in', () {
+      final grid = productGrid();
+      grid.setColumnPin('price', ColumnPin.start);
+      grid.setColumnPin('name', ColumnPin.end);
+      // Screen order: the leading pane, the scrolling pane, then the
+      // trailing pane - not the order the columns were declared in.
+      expect(
+          grid.visibleFields, ['price', 'category', 'stock', 'active', 'name']);
+    });
+
+    test('arrow keys move to the next column on screen, not in the list', () {
+      final grid = productGrid(selectionMode: SelectionMode.cellRange);
+      grid.setColumnPin('stock', ColumnPin.start);
+      grid.selectCell(const CellAddress(0, 'stock'));
+      grid.moveActiveCell(0, 1);
+      expect(grid.selection.activeCell!.field, 'name');
+    });
+
     test('moving a column changes display order', () {
       final grid = productGrid();
       grid.moveColumn('name', 2);
@@ -358,6 +376,91 @@ void main() {
       final grid = productGrid();
       grid.moveColumn('name', 99);
       expect(grid.visibleFields.last, 'name');
+    });
+  });
+
+  group('auto-sizing', () {
+    // A stand-in for a text measurer: 7 pixels a character is close enough to
+    // a proportional font for a test about the arithmetic around it.
+    double measure(String text) => text.length * 7;
+
+    test('fits the widest sampled value plus the cell padding', () {
+      final grid = productGrid();
+      // 'Keyboard' is the longest name at 8 characters.
+      expect(grid.autoSizeColumn('name', measure: measure, padding: 10),
+          8 * 7 + 10);
+      expect(grid.widthOf('name'), 8 * 7 + 10);
+    });
+
+    test('takes the header into account, and can be told not to', () {
+      final grid = productGrid();
+      final withHeader = grid.autoSizeColumn('active', measure: measure);
+      grid.resetColumnWidth('active');
+      final without = grid.autoSizeColumn(
+        'active',
+        measure: measure,
+        includeHeader: false,
+      );
+      expect(withHeader, greaterThan(without!));
+    });
+
+    test('measures formatted text, not the raw value', () {
+      final grid = productGrid();
+      // The price column formats as '1450.00 USD'.
+      expect(grid.autoSizeColumn('price', measure: measure, padding: 0),
+          '1450.00 USD'.length * 7);
+    });
+
+    test('clamps to the column bounds', () {
+      final columns = productColumns()
+        ..[0] = productColumns()[0].copyWith(maxWidth: 60);
+      final grid = GridController<Product>(
+        columns: columns,
+        dataSource: InMemoryDataSource(sampleProducts()),
+      );
+      expect(grid.autoSizeColumn('name', measure: measure), 60);
+    });
+
+    test('refuses a column that cannot be resized', () {
+      final columns = productColumns()
+        ..[0] = productColumns()[0].copyWith(resizable: false);
+      final grid = GridController<Product>(
+        columns: columns,
+        dataSource: InMemoryDataSource(sampleProducts()),
+      );
+      expect(grid.autoSizeColumn('name', measure: measure), isNull);
+      expect(grid.autoSizeColumn('nope', measure: measure), isNull);
+    });
+
+    test('samples at most sampleSize rows', () {
+      final rows = [
+        for (var i = 0; i < 100; i++)
+          Product(
+            id: i,
+            name: i == 99 ? 'a very long name indeed' : 'short',
+            category: 'x',
+            price: i,
+          ),
+      ];
+      final grid = productGrid(rows: rows);
+      var calls = 0;
+      grid.autoSizeColumn('name', measure: (text) {
+        calls++;
+        return text.length * 7;
+      }, sampleSize: 10);
+      expect(calls, lessThanOrEqualTo(11), reason: '10 rows and the header');
+    });
+
+    test('autoSizeColumns fits every visible column at once', () {
+      final grid = productGrid();
+      grid.setColumnVisible('active', false);
+      final seen = <String>{};
+      grid.autoSizeColumns(measure: (column, text) {
+        seen.add(column.field);
+        return text.length * 7;
+      });
+      expect(seen, {'name', 'category', 'price', 'stock'});
+      expect(grid.widthOf('name'), 8 * 7 + 24);
     });
   });
 

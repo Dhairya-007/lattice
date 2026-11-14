@@ -84,6 +84,7 @@ GridController<Product> productGrid({
   int? pageSize,
   SelectionMode selectionMode = SelectionMode.multiRow,
   List<Product>? rows,
+  bool identified = false,
 }) {
   return GridController<Product>(
     columns: productColumns(),
@@ -93,6 +94,7 @@ GridController<Product> productGrid({
     aggregations: aggregations,
     pageSize: pageSize,
     selectionMode: selectionMode,
+    rowKey: identified ? (p) => p.id : null,
   );
 }
 

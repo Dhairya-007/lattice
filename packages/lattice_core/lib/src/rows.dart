@@ -22,12 +22,43 @@ sealed class GridRow<T> {
 }
 
 /// A row backed by one item of the data source.
+/// A row's place in a tree.
+///
+/// One object rather than three fields on [DataGridRow], and null for the
+/// flat and grouped cases. A grouped 50k-row grid allocates a [DataGridRow]
+/// per visible row every time anything changes, and an ungrouped one builds
+/// them on every read, so what those objects cost to construct is a
+/// measurable part of a group toggle. A tree pays one small allocation per
+/// row it actually nests; everything else pays one null field.
+class TreeRowInfo {
+  const TreeRowInfo({
+    required this.path,
+    required this.hasChildren,
+    required this.expanded,
+  });
+
+  /// Identity of this row within the tree, built from its ancestors' keys.
+  ///
+  /// Used to remember which branches are open, exactly as a group's path is.
+  final String path;
+
+  /// Whether this row has rows of its own beneath it.
+  final bool hasChildren;
+
+  /// Whether this row's children are shown.
+  final bool expanded;
+
+  @override
+  String toString() => 'TreeRowInfo($path)';
+}
+
 class DataGridRow<T> extends GridRow<T> {
   const DataGridRow({
     required super.index,
     required this.data,
     required this.sourceIndex,
     super.depth = 0,
+    this.tree,
   });
 
   final T data;
@@ -35,6 +66,22 @@ class DataGridRow<T> extends GridRow<T> {
   /// Index of [data] in the unsorted, unfiltered source list, or -1 when the
   /// source cannot provide one (remote paging).
   final int sourceIndex;
+
+  /// This row's place in the hierarchy, or null in a flat or grouped grid.
+  final TreeRowInfo? tree;
+
+  /// Identity of this row within a tree, empty in a flat or grouped grid.
+  String get treePath => tree?.path ?? '';
+
+  /// Whether this row is a parent, i.e. it has rows of its own beneath it.
+  ///
+  /// Always false in a flat or grouped grid, so an adapter can ask any row
+  /// without first asking what kind of grid it is in.
+  bool get hasChildren => tree?.hasChildren ?? false;
+
+  /// Whether this row's children are shown. Meaningless unless
+  /// [hasChildren].
+  bool get expanded => tree?.expanded ?? true;
 
   @override
   String toString() => 'DataGridRow($index <- $sourceIndex)';
@@ -47,10 +94,22 @@ class GroupGridRow<T> extends GridRow<T> {
     required super.depth,
     required this.node,
     required this.expanded,
+    this.loading = false,
   });
 
   final GroupNode<T> node;
   final bool expanded;
+
+  /// Whether the grid is waiting for this group's contents.
+  ///
+  /// Only ever true for a lazily grouped source: the header is on screen, the
+  /// rows are in flight, and the adapter should say so rather than leave an
+  /// open group looking empty.
+  final bool loading;
+
+  /// Whether this group's contents are in hand. False for a header whose rows
+  /// a lazy source has not been asked for yet.
+  bool get isLoaded => node.loaded;
 
   String get field => node.field;
   Object? get key => node.key;
@@ -76,6 +135,20 @@ class GroupExpansionState {
 
   /// Paths whose state differs from [expandedByDefault].
   final Set<String> _overrides;
+
+  /// The paths the user has changed from the default, for a saved view.
+  ///
+  /// Saving the overrides rather than the open paths is what lets a restored
+  /// view stay correct when the data has grown: a group the user never
+  /// touched takes the grid's default, whenever it first appeared.
+  Set<String> get overrides => Set.unmodifiable(_overrides);
+
+  /// Replaces the override set, as restoring a saved view does.
+  void setOverrides(Iterable<String> paths) {
+    _overrides
+      ..clear()
+      ..addAll(paths);
+  }
 
   bool isExpanded(String path) =>
       _overrides.contains(path) ? !expandedByDefault : expandedByDefault;
@@ -111,8 +184,9 @@ class GroupExpansionState {
 /// groups.
 List<GridRow<T>> flattenGroups<T>(
   List<GroupNode<T>> nodes,
-  GroupExpansionState expansion,
-) {
+  GroupExpansionState expansion, {
+  Set<String> loadingPaths = const {},
+}) {
   final out = <GridRow<T>>[];
   void walk(List<GroupNode<T>> level) {
     for (final node in level) {
@@ -122,8 +196,12 @@ List<GridRow<T>> flattenGroups<T>(
         depth: node.depth,
         node: node,
         expanded: expanded,
+        loading: loadingPaths.contains(node.path),
       ));
       if (!expanded) continue;
+      // An open group whose rows have not arrived yet shows its header and
+      // nothing under it, rather than claiming to be empty.
+      if (!node.loaded) continue;
       if (node.isLeafGroup) {
         for (final row in node.rows) {
           out.add(DataGridRow<T>(
@@ -154,12 +232,20 @@ List<GridRow<T>> flattenGroups<T>(
 /// equal in content but not identical. Compare [DataGridRow.data] or
 /// [GridRow.index] rather than identity.
 class LazyDataRowList<T> extends ListBase<GridRow<T>> {
-  LazyDataRowList(this._rows, {this.offset = 0});
+  LazyDataRowList(this._rows, {this.offset = 0, T Function(T row)? substitute})
+      : _substitute = substitute;
 
   final List<T> _rows;
 
   /// Index of the first row in the unfiltered source, for remote paging.
   final int offset;
+
+  /// Replaces a row as it is read, or null to read it through unchanged.
+  ///
+  /// This is how an edit that has been committed but not yet confirmed by a
+  /// remote source stays on screen: the substitution happens per read, so a
+  /// grid with no pending write pays nothing for it.
+  final T Function(T row)? _substitute;
 
   @override
   int get length => _rows.length;
@@ -169,11 +255,15 @@ class LazyDataRowList<T> extends ListBase<GridRow<T>> {
       throw UnsupportedError('The grid row list is read-only.');
 
   @override
-  GridRow<T> operator [](int index) => DataGridRow<T>(
-        index: index,
-        data: _rows[index],
-        sourceIndex: offset + index,
-      );
+  GridRow<T> operator [](int index) {
+    final row = _rows[index];
+    final substitute = _substitute;
+    return DataGridRow<T>(
+      index: index,
+      data: substitute == null ? row : substitute(row),
+      sourceIndex: offset + index,
+    );
+  }
 
   @override
   void operator []=(int index, GridRow<T> value) =>
