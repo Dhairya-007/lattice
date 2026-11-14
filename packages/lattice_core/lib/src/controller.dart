@@ -12,7 +12,9 @@ import 'export.dart';
 import 'fetch.dart';
 import 'filter.dart';
 import 'group.dart';
+import 'history.dart';
 import 'layout.dart';
+import 'paste.dart';
 import 'notifier.dart';
 import 'query.dart';
 import 'rows.dart';
@@ -896,6 +898,19 @@ class GridController<T> with GridChangeNotifier {
       notifyListeners();
       return result;
     }
+    if (session.value != session.originalValue) {
+      _history.record(EditAction<T>(
+        label: 'Edit ${session.column.title}',
+        changes: [
+          CellEdit<T>(
+            row: row,
+            field: session.cell.field,
+            before: session.originalValue,
+            after: session.value,
+          ),
+        ],
+      ));
+    }
     _pendingWrite = _write(session.row, row);
     return result;
   }
@@ -935,9 +950,17 @@ class GridController<T> with GridChangeNotifier {
 
   T _substituteWrite(T row) => _pendingWrites[_identityOf(row)] ?? row;
 
-  /// Sends a committed row to the source, showing it immediately and rolling
-  /// it back if the source refuses it.
-  Future<void> _write(T original, T updated) async {
+  Future<void> _write(T original, T updated) =>
+      _writeAll([RowUpdate<T>(original, updated)]);
+
+  /// Sends committed rows to the source, showing them immediately and rolling
+  /// them back if the source refuses them.
+  ///
+  /// One call is one change: a paste across twenty rows goes down as a single
+  /// batch and the grid re-queries once, because twenty write-through
+  /// refreshes would also be twenty re-sorts.
+  Future<void> _writeAll(List<RowUpdate<T>> writes) async {
+    if (writes.isEmpty) return;
     final source = _dataSource;
     if (!source.canCommit) {
       // beginEdit refuses a read-only source, so reaching this means the
@@ -951,10 +974,10 @@ class GridController<T> with GridChangeNotifier {
 
     if (source.isLocal) {
       // A local source answers synchronously and its own write-through
-      // refresh already shows the new value; an overlay would only buy a
+      // refresh already shows the new values; an overlay would only buy a
       // second rebuild.
       try {
-        await source.commit(original, updated);
+        await source.commitAll(writes);
       } catch (error) {
         if (isDisposed) return;
         _writeError = error;
@@ -963,28 +986,250 @@ class GridController<T> with GridChangeNotifier {
       return;
     }
 
-    final key = _identityOf(original);
-    _pendingWrites[key] = updated;
+    final keys = [for (final write in writes) _identityOf(write.original)];
+    for (var i = 0; i < writes.length; i++) {
+      _pendingWrites[keys[i]] = writes[i].updated;
+    }
     _writeError = null;
     _reapply();
     try {
-      final stored = await source.commit(original, updated);
+      final stored = await source.commitAll(writes);
       if (isDisposed) return;
-      // The source may have normalised the value; show what it returned.
-      _pendingWrites[key] = stored;
+      // The source may have normalised the values; show what it returned.
+      for (var i = 0; i < keys.length && i < stored.length; i++) {
+        _pendingWrites[keys[i]] = stored[i];
+      }
       // Re-query, so an edit that changed a sort or filter key moves its row.
-      // The pending value covers the gap until the source's own copy of the
-      // row carries it.
+      // The pending values cover the gap until the source's own copies carry
+      // them.
       await refresh();
       if (isDisposed) return;
-      _pendingWrites.remove(key);
+      keys.forEach(_pendingWrites.remove);
       _reapply();
     } catch (error) {
       if (isDisposed) return;
-      _pendingWrites.remove(key);
+      keys.forEach(_pendingWrites.remove);
       _writeError = error;
       _reapply();
     }
+  }
+
+  // -- Paste ----------------------------------------------------------------
+
+  /// Writes clipboard text into the grid, starting at [at] or at the active
+  /// cell.
+  ///
+  /// The inverse of [copySelectionAsText]: the text is split into rows and
+  /// cells, each cell is parsed into its column's type by [coerceValue] and
+  /// put through that column's validator, and the result is written as one
+  /// change that one [undo] takes back.
+  ///
+  /// Columns are filled rightwards from the target in screen order and rows
+  /// downwards. A block that runs past the edge of the grid is clipped rather
+  /// than growing it - the engine has no way to invent a row of `T` - and
+  /// [PasteResult.cellsClipped] says how much was left out.
+  ///
+  /// With [allOrNothing] true, the default, a single bad cell writes nothing:
+  /// half a pasted block is harder to recover from than none of it, because
+  /// the user cannot see where it stopped. Pass false to write what fits and
+  /// read [PasteResult.rejections] for the rest.
+  PasteResult pasteText(
+    String text, {
+    CellAddress? at,
+    bool allOrNothing = true,
+    String delimiter = '\t',
+  }) {
+    final target = at ?? selection.activeCell;
+    if (target == null) return const PasteResult.noTarget();
+    if (!_dataSource.canCommit) {
+      return PasteResult(
+        rejections: [
+          PasteRejection(
+            cell: target,
+            text: text,
+            reason: '${_dataSource.runtimeType} cannot save edits',
+          ),
+        ],
+      );
+    }
+
+    final block = parseClipboardText(text, delimiter: delimiter);
+    if (block.isEmpty) return const PasteResult();
+
+    final fields = visibleFields;
+    final firstColumn = fields.indexOf(target.field);
+    if (firstColumn < 0) return const PasteResult.noTarget();
+
+    final byField = columnsByField;
+    final rejections = <PasteRejection>[];
+    final changes = <CellEdit<T>>[];
+    // Several cells can land in one row, and that row has to be written once,
+    // with all of them applied.
+    final patches = <_RowPatch<T>>[];
+    final slots = <Object, int>{};
+    var clipped = 0;
+
+    for (var r = 0; r < block.length; r++) {
+      final rowIndex = target.row + r;
+      final data = dataAt(rowIndex);
+      if (data == null) {
+        clipped += block[r].length;
+        continue;
+      }
+      final identity = _identityOf(data);
+      for (var c = 0; c < block[r].length; c++) {
+        final columnIndex = firstColumn + c;
+        if (columnIndex >= fields.length) {
+          clipped++;
+          continue;
+        }
+        final field = fields[columnIndex];
+        final column = byField[field];
+        final cell = CellAddress(rowIndex, field);
+        final raw = block[r][c];
+        if (column == null || !column.editable) {
+          rejections.add(PasteRejection(
+            cell: cell,
+            text: raw,
+            reason: 'Column is not editable',
+          ));
+          continue;
+        }
+        final value = coerceValue(raw, column.type);
+        if (value == null && raw.trim().isNotEmpty) {
+          rejections.add(PasteRejection(
+            cell: cell,
+            text: raw,
+            reason: 'Not a ${column.type.name}',
+          ));
+          continue;
+        }
+        final error = column.validator?.call(value);
+        if (error != null) {
+          rejections.add(PasteRejection(cell: cell, text: raw, reason: error));
+          continue;
+        }
+        final before = column.value(data);
+        if (before == value) continue;
+        var slot = slots[identity];
+        if (slot == null) {
+          slot = patches.length;
+          slots[identity] = slot;
+          patches.add(_RowPatch<T>(data));
+        }
+        patches[slot].values[field] = value;
+        changes.add(CellEdit<T>(
+          row: data,
+          field: field,
+          before: before,
+          after: value,
+        ));
+      }
+    }
+
+    if (rejections.isNotEmpty && allOrNothing) {
+      return PasteResult(
+        cellsClipped: clipped,
+        rejections: rejections,
+      );
+    }
+    if (changes.isEmpty) {
+      return PasteResult(cellsClipped: clipped, rejections: rejections);
+    }
+
+    _history.record(EditAction<T>(label: 'Paste', changes: changes));
+    _pendingWrite = _writeAll(_updatesFor(patches));
+    notifyListeners();
+    return PasteResult(
+      rowsChanged: patches.length,
+      cellsChanged: changes.length,
+      cellsClipped: clipped,
+      rejections: rejections,
+      applied: true,
+    );
+  }
+
+  List<RowUpdate<T>> _updatesFor(List<_RowPatch<T>> patches) => [
+        for (final patch in patches)
+          RowUpdate<T>(patch.row, _withValues(patch.row, patch.values)),
+      ];
+
+  /// Applies several cell values to one row, through the columns' setters.
+  ///
+  /// A setter that returns null has mutated the row in place, so the chain
+  /// carries on with the row it was given.
+  T _withValues(T row, Map<String, Object?> values) {
+    var updated = row;
+    for (final entry in values.entries) {
+      final setValue = column(entry.key)?.setValue;
+      if (setValue == null) continue;
+      updated = setValue(updated, entry.value) ?? updated;
+    }
+    return updated;
+  }
+
+  // -- Undo and redo --------------------------------------------------------
+
+  final EditHistory<T> _history = EditHistory<T>();
+
+  /// Undo and redo over committed edits.
+  ///
+  /// Read it for [EditHistory.canUndo] and the labels of the next steps; call
+  /// [undo] and [redo] rather than its own take methods, so the change is
+  /// actually written back.
+  EditHistory<T> get history => _history;
+
+  /// Takes back the last committed edit or paste, as one step.
+  ///
+  /// Returns false when there is nothing to undo, or when the rows an action
+  /// touched can no longer be found - deleted, or filtered out of the current
+  /// view. Finding them needs either a [rowKey] or a row model whose setter
+  /// mutates in place; an immutable model without a key cannot be matched to
+  /// the instances the source now holds.
+  bool undo() => _replay(_history.takeUndo()?.inverse);
+
+  /// Re-applies the edit [undo] took back.
+  bool redo() => _replay(_history.takeRedo());
+
+  bool get canUndo => _history.canUndo;
+  bool get canRedo => _history.canRedo;
+
+  bool _replay(EditAction<T>? action) {
+    if (action == null || action.isEmpty) return false;
+    final patches = <_RowPatch<T>>[];
+    final slots = <Object, int>{};
+
+    for (final change in action.changes) {
+      final current = _currentRowFor(change.row);
+      if (current == null) continue;
+      final identity = _identityOf(current);
+      var slot = slots[identity];
+      if (slot == null) {
+        slot = patches.length;
+        slots[identity] = slot;
+        patches.add(_RowPatch<T>(current));
+      }
+      patches[slot].values[change.field] = change.after;
+    }
+    if (patches.isEmpty) return false;
+
+    _pendingWrite = _writeAll(_updatesFor(patches));
+    notifyListeners();
+    return true;
+  }
+
+  /// The instance the grid currently holds for [row], matched by [rowKey]
+  /// where there is one.
+  T? _currentRowFor(T row) {
+    final key = rowKey;
+    if (key == null) return row;
+    final wanted = key(row);
+    for (final visible in _visibleRows) {
+      if (visible is DataGridRow<T> && key(visible.data) == wanted) {
+        return visible.data;
+      }
+    }
+    return null;
   }
 
   void cancelEdit() {
@@ -1150,4 +1395,15 @@ class GridController<T> with GridChangeNotifier {
     _dataSource.removeListener(_onSourceChanged);
     super.dispose();
   }
+}
+
+/// A row and the cell values bound for it.
+///
+/// A paste or an undo can touch several cells of the same row, and the row
+/// has to be written once with all of them applied - not once per cell.
+class _RowPatch<T> {
+  _RowPatch(this.row);
+
+  final T row;
+  final Map<String, Object?> values = {};
 }

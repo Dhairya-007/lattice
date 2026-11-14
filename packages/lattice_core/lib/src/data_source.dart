@@ -11,6 +11,20 @@ import 'notifier.dart';
 import 'query.dart';
 import 'sort.dart';
 
+/// One row to be written, as it was and as it should become.
+class RowUpdate<T> {
+  const RowUpdate(this.original, this.updated);
+
+  /// The row as the source currently holds it, so it can be found again.
+  final T original;
+
+  /// The row to store in its place.
+  final T updated;
+
+  @override
+  String toString() => 'RowUpdate($original -> $updated)';
+}
+
 /// Supplies rows for a [GridQuery].
 ///
 /// Implement this to put a grid in front of anything: a list in memory, a
@@ -69,6 +83,20 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
       '$runtimeType cannot write rows back. Override commit and canCommit to '
       'support editing.',
     );
+  }
+
+  /// Writes several rows as one change, returning them in the order given.
+  ///
+  /// A paste into a range is one user action, so it should be one write: a
+  /// source that can send a batch in a single request or a single transaction
+  /// overrides this, and the default walks [commit] for a source that cannot.
+  /// Either way the grid refreshes once.
+  Future<List<T>> commitAll(List<RowUpdate<T>> writes) async {
+    final out = <T>[];
+    for (final write in writes) {
+      out.add(await commit(write.original, write.updated));
+    }
+    return out;
   }
 
   /// Range of the values currently shown in [field], for conditional
@@ -185,6 +213,29 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     // edit that changes the sort key moves its row immediately.
     replaceAt(index, updated);
     return updated;
+  }
+
+  /// Replaces every row in [writes], notifying once.
+  ///
+  /// A paste of 200 cells across 20 rows would otherwise re-run the query 20
+  /// times, and each of those re-runs re-sorts.
+  @override
+  Future<List<T>> commitAll(List<RowUpdate<T>> writes) async {
+    if (writes.isEmpty) return const [];
+    final indices = <int>[];
+    for (final write in writes) {
+      final index = _rows.indexOf(write.original);
+      if (index < 0) {
+        throw StateError('An edited row is no longer in the source.');
+      }
+      indices.add(index);
+    }
+    for (var i = 0; i < writes.length; i++) {
+      _rows[indices[i]] = writes[i].updated;
+    }
+    bumpRevision();
+    notifyListeners();
+    return [for (final write in writes) write.updated];
   }
 
   @override
