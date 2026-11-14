@@ -26,6 +26,7 @@ class GridQuery {
     this.offset = 0,
     this.limit,
     this.signal,
+    this.lazyGroups = false,
   });
 
   final List<SortSpec> sorts;
@@ -48,6 +49,15 @@ class GridQuery {
 
   /// Maximum number of rows to return; `null` means all of them.
   final int? limit;
+
+  /// Asks for group headers without their rows.
+  ///
+  /// Grouping normally needs every matching row, because a header has to
+  /// count its group - which means grouping a remote source downloads the
+  /// whole table. A source that can group server-side answers a lazy query
+  /// with headers and counts only (see [GroupNode.declaredCount]), and the
+  /// grid asks for a group's contents when the user opens it.
+  final bool lazyGroups;
 
   /// Tells the source the grid has given up on this fetch, so a remote
   /// request can be aborted rather than merely ignored when it lands.
@@ -72,6 +82,7 @@ class GridQuery {
     int? limit,
     bool clearLimit = false,
     FetchSignal? signal,
+    bool? lazyGroups,
   }) {
     return GridQuery(
       sorts: sorts ?? this.sorts,
@@ -83,6 +94,7 @@ class GridQuery {
       offset: offset ?? this.offset,
       limit: clearLimit ? null : (limit ?? this.limit),
       signal: signal ?? this.signal,
+      lazyGroups: lazyGroups ?? this.lazyGroups,
     );
   }
 
@@ -94,6 +106,7 @@ class GridQuery {
         if (groups.isNotEmpty) 'groups': [for (final g in groups) g.toJson()],
         if (offset != 0) 'offset': offset,
         if (limit != null) 'limit': limit,
+        if (lazyGroups) 'lazyGroups': true,
       };
 
   /// Rebuilds a query produced by [toJson].
@@ -125,6 +138,7 @@ class GridQuery {
       aggregations: aggregations,
       offset: (json['offset'] as num?)?.toInt() ?? 0,
       limit: (json['limit'] as num?)?.toInt(),
+      lazyGroups: json['lazyGroups'] == true,
     );
   }
 

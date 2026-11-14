@@ -47,6 +47,7 @@ class GridController<T> with GridChangeNotifier {
     this.rowKey,
     this.fetchDebounce,
     this.keepRowsOnError = false,
+    this.lazyGrouping = false,
   })  : _columns = List<GridColumn<T>>.of(columns),
         _dataSource = dataSource,
         _sorts = List<SortSpec>.of(sorts),
@@ -105,6 +106,17 @@ class GridController<T> with GridChangeNotifier {
   /// search box and the filter row - and only to a source that is not local.
   /// A few hundred milliseconds turns a typed word into one request.
   Duration? fetchDebounce;
+
+  /// Whether grouping may be resolved one group at a time by the source.
+  ///
+  /// Grouping otherwise needs every matching row, because the grid counts the
+  /// groups itself - so grouping a million-row backend downloads a million
+  /// rows. With this on, and a source whose
+  /// [LatticeDataSource.supportsLazyGroups] is true, the query asks for
+  /// headers and counts only and each group's contents are fetched when it is
+  /// opened. Pair it with `groupsExpandedByDefault: false`, or the first
+  /// render asks for every group at once and the saving is lost.
+  final bool lazyGrouping;
 
   /// Whether a failed fetch keeps the rows it was replacing.
   ///
@@ -253,6 +265,7 @@ class GridController<T> with GridChangeNotifier {
       aggregations: _aggregations,
       offset: size == null || size <= 0 || isGrouped ? 0 : _pageIndex * size,
       limit: isGrouped ? null : (size != null && size > 0 ? size : null),
+      lazyGroups: isLazilyGrouped,
     );
   }
 
@@ -331,6 +344,10 @@ class GridController<T> with GridChangeNotifier {
       final result = await source.fetch(query.copyWith(signal: signal));
       if (token != _fetchToken || isDisposed) return;
       _loading = false;
+      // The groups the source just sent supersede anything cached for the
+      // query they replace.
+      _loadedGroups.clear();
+      _groupErrors.clear();
       _apply(result);
     } on FetchCancelled {
       // A cancelled fetch has no answer and is not a failure: the refresh
@@ -352,7 +369,11 @@ class GridController<T> with GridChangeNotifier {
 
     _result = result;
     _visibleRows = result.isGrouped
-        ? flattenGroups<T>(result.groups, expansion)
+        ? flattenGroups<T>(
+            _mergeLoadedGroups(result.groups),
+            expansion,
+            loadingPaths: _loadingGroups,
+          )
         // Lazy: an ungrouped 50k-row grid must not allocate 50k wrappers on
         // every change. See [LazyDataRowList].
         : LazyDataRowList<T>(
@@ -387,6 +408,112 @@ class GridController<T> with GridChangeNotifier {
     }
     selection.clampTo(_visibleRows.length);
     notifyListeners();
+    if (isLazilyGrouped) _requestOpenGroups();
+  }
+
+  // -- Lazy grouping --------------------------------------------------------
+
+  /// Contents of the groups fetched so far, keyed by [GroupNode.path].
+  final Map<String, GroupChildren<T>> _loadedGroups = {};
+  final Set<String> _loadingGroups = <String>{};
+
+  /// Whether grouping is being resolved a group at a time by the source.
+  ///
+  /// True when [lazyGrouping] is on, the grid is grouped, and the source says
+  /// it can answer a [GridQuery.lazyGroups] query. A local source always
+  /// groups in full: it already holds every row, so there is nothing to defer.
+  bool get isLazilyGrouped =>
+      lazyGrouping &&
+      isGrouped &&
+      !_dataSource.isLocal &&
+      _dataSource.supportsLazyGroups;
+
+  /// Whether the grid is waiting for the contents of [path].
+  bool isGroupLoading(String path) => _loadingGroups.contains(path);
+
+  /// Grafts the contents fetched for a group onto the header the source sent.
+  List<GroupNode<T>> _mergeLoadedGroups(List<GroupNode<T>> nodes) {
+    if (_loadedGroups.isEmpty) return nodes;
+    return [
+      for (final node in nodes)
+        () {
+          final loaded = _loadedGroups[node.path];
+          if (loaded != null) {
+            return node.withContents(
+              children: _mergeLoadedGroups(loaded.groups),
+              rows: loaded.rows,
+              aggregates: loaded.aggregates,
+            );
+          }
+          if (node.children.isEmpty) return node;
+          return node.withChildren(_mergeLoadedGroups(node.children));
+        }(),
+    ];
+  }
+
+  /// Asks the source for the contents of every open group it has not sent.
+  ///
+  /// Driven from the rows rather than from the tree, so only groups the user
+  /// can actually see are fetched: an open group inside a closed one costs
+  /// nothing until its parent is opened.
+  void _requestOpenGroups() {
+    final pending = <GroupNode<T>>[];
+    for (final row in _visibleRows) {
+      if (row is! GroupGridRow<T>) continue;
+      if (!row.expanded || row.isLoaded) continue;
+      final path = row.node.path;
+      if (_loadingGroups.contains(path)) continue;
+      if (_loadedGroups.containsKey(path)) continue;
+      // A group that failed is not retried on every rebuild; see
+      // [invalidateGroup].
+      if (_groupErrors.containsKey(path)) continue;
+      pending.add(row.node);
+    }
+    if (pending.isEmpty) return;
+
+    for (final node in pending) {
+      _loadingGroups.add(node.path);
+    }
+    // Re-flatten before the requests go out, so an open group says it is
+    // loading rather than looking empty. Every path is marked by now, so this
+    // cannot ask for the same group twice.
+    _rebuildRows();
+    for (final node in pending) {
+      _loadGroup(node);
+    }
+  }
+
+  Future<void> _loadGroup(GroupNode<T> node) async {
+    final source = _dataSource;
+    final pending = query;
+    try {
+      final children = await source.fetchGroupChildren(pending, node);
+      if (isDisposed || source != _dataSource) return;
+      _loadedGroups[node.path] = children;
+    } on FetchCancelled {
+      return;
+    } catch (error) {
+      if (isDisposed) return;
+      // A group that would not load is a failure of this group, not of the
+      // grid: the other groups are still good.
+      _groupErrors[node.path] = error;
+    } finally {
+      _loadingGroups.remove(node.path);
+      if (!isDisposed) _rebuildRows();
+    }
+  }
+
+  final Map<String, Object?> _groupErrors = {};
+
+  /// Error from the last attempt to load [path], if it failed.
+  Object? groupError(String path) => _groupErrors[path];
+
+  /// Forgets a group's contents so they are fetched again when it is next
+  /// open. Called after a write, or by a UI's retry.
+  void invalidateGroup(String path) {
+    _loadedGroups.remove(path);
+    _groupErrors.remove(path);
+    _rebuildRows();
   }
 
   /// Identities of the rows the selection, the active cell and any open edit

@@ -11,6 +11,28 @@ import 'notifier.dart';
 import 'query.dart';
 import 'sort.dart';
 
+/// What one group holds, fetched when the user opened it.
+class GroupChildren<T> {
+  const GroupChildren({
+    this.rows = const [],
+    this.groups = const [],
+    this.aggregates,
+  });
+
+  /// Leaf rows, when this was the innermost grouping level.
+  final List<T> rows;
+
+  /// Child groups, when another level remains. They may themselves be
+  /// unloaded headers, so a deep grouping stays lazy all the way down.
+  final List<GroupNode<T>> groups;
+
+  /// Aggregates for the group, if the source computed them now rather than
+  /// with the header. Null leaves whatever the header carried.
+  final AggregateResult? aggregates;
+
+  bool get isEmpty => rows.isEmpty && groups.isEmpty;
+}
+
 /// One row to be written, as it was and as it should become.
 class RowUpdate<T> {
   const RowUpdate(this.original, this.updated);
@@ -103,6 +125,32 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
   /// formatting. Sources that cannot answer cheaply return
   /// [ColumnStats.empty], which leaves rules inert rather than wrong.
   ColumnStats statsFor(String field) => ColumnStats.empty;
+
+  /// Whether this source can answer a [GridQuery.lazyGroups] query, returning
+  /// group headers with counts and the rows of a group only when asked.
+  ///
+  /// This is what makes grouping usable over a large backend: without it,
+  /// grouping has to pull every matching row so the grid can count the
+  /// groups itself.
+  bool get supportsLazyGroups => false;
+
+  /// Resolves the contents of one group.
+  ///
+  /// [node] carries the group's [GroupNode.keys], which is what translates
+  /// into a filter, and [query] is the query the headers came from, so the
+  /// source can apply the same filters, search and ordering within the group.
+  ///
+  /// Return child groups when another grouping level remains, or rows when
+  /// this is the innermost one. Only called when [supportsLazyGroups] is true.
+  Future<GroupChildren<T>> fetchGroupChildren(
+    GridQuery query,
+    GroupNode<T> node,
+  ) {
+    throw UnsupportedError(
+      '$runtimeType cannot resolve a group lazily. Override '
+      'fetchGroupChildren and supportsLazyGroups to support it.',
+    );
+  }
 
   /// The distinct values of [field] among the rows that currently match, in
   /// ascending order, for a checkbox filter list.

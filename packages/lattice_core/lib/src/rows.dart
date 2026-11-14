@@ -47,10 +47,22 @@ class GroupGridRow<T> extends GridRow<T> {
     required super.depth,
     required this.node,
     required this.expanded,
+    this.loading = false,
   });
 
   final GroupNode<T> node;
   final bool expanded;
+
+  /// Whether the grid is waiting for this group's contents.
+  ///
+  /// Only ever true for a lazily grouped source: the header is on screen, the
+  /// rows are in flight, and the adapter should say so rather than leave an
+  /// open group looking empty.
+  final bool loading;
+
+  /// Whether this group's contents are in hand. False for a header whose rows
+  /// a lazy source has not been asked for yet.
+  bool get isLoaded => node.loaded;
 
   String get field => node.field;
   Object? get key => node.key;
@@ -125,8 +137,9 @@ class GroupExpansionState {
 /// groups.
 List<GridRow<T>> flattenGroups<T>(
   List<GroupNode<T>> nodes,
-  GroupExpansionState expansion,
-) {
+  GroupExpansionState expansion, {
+  Set<String> loadingPaths = const {},
+}) {
   final out = <GridRow<T>>[];
   void walk(List<GroupNode<T>> level) {
     for (final node in level) {
@@ -136,8 +149,12 @@ List<GridRow<T>> flattenGroups<T>(
         depth: node.depth,
         node: node,
         expanded: expanded,
+        loading: loadingPaths.contains(node.path),
       ));
       if (!expanded) continue;
+      // An open group whose rows have not arrived yet shows its header and
+      // nothing under it, rather than claiming to be empty.
+      if (!node.loaded) continue;
       if (node.isLeafGroup) {
         for (final row in node.rows) {
           out.add(DataGridRow<T>(
