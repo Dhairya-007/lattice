@@ -588,6 +588,79 @@ class GridController<T> with GridChangeNotifier {
     notifyListeners();
   }
 
+  /// Widens or narrows [field] to fit its contents, and returns the width it
+  /// settled on.
+  ///
+  /// The engine cannot measure text - that is the one thing it has to ask the
+  /// toolkit for - so the caller passes [measure], which returns the width of
+  /// a string in logical pixels. In Flutter that is a `TextPainter` with the
+  /// cell's own style; the engine samples the rows, formats the values and
+  /// takes the widest.
+  ///
+  /// At most [sampleSize] rows are measured, spread evenly across the view
+  /// rather than taken from the top, because the widest value in a 50k-row
+  /// column is rarely in the first screenful and measuring all of them is not
+  /// affordable. The result is a best fit, not a guarantee: a row that was not
+  /// sampled can still be clipped.
+  ///
+  /// [padding] is added to the measured text for the cell's own insets, and
+  /// the result is clamped to the column's [GridColumn.minWidth] and
+  /// [GridColumn.maxWidth]. Returns null when there is no such column, or it
+  /// is not resizable.
+  double? autoSizeColumn(
+    String field, {
+    required double Function(String text) measure,
+    int sampleSize = 200,
+    double padding = 24,
+    bool includeHeader = true,
+  }) {
+    final column = this.column(field);
+    if (column == null || !column.resizable) return null;
+
+    var widest = includeHeader ? measure(column.title) : 0.0;
+    final rows = _visibleRows;
+    final step = rows.length <= sampleSize ? 1 : rows.length ~/ sampleSize;
+    for (var i = 0; i < rows.length; i += step) {
+      final row = rows[i];
+      if (row is! DataGridRow<T>) continue;
+      final width = measure(column.formattedValue(row.data));
+      if (width > widest) widest = width;
+    }
+
+    final fitted = column.clampWidth(widest + padding);
+    _columnWidths[field] = fitted;
+    notifyListeners();
+    return fitted;
+  }
+
+  /// Fits every visible column, in one notification.
+  ///
+  /// [measure] is given the column as well as the text, so an adapter can use
+  /// each column's own style rather than one style for the grid.
+  void autoSizeColumns({
+    required double Function(GridColumn<T> column, String text) measure,
+    int sampleSize = 200,
+    double padding = 24,
+    bool includeHeader = true,
+  }) {
+    final rows = _visibleRows;
+    final step = rows.length <= sampleSize ? 1 : rows.length ~/ sampleSize;
+    var changed = false;
+    for (final column in visibleColumns) {
+      if (!column.resizable) continue;
+      var widest = includeHeader ? measure(column, column.title) : 0.0;
+      for (var i = 0; i < rows.length; i += step) {
+        final row = rows[i];
+        if (row is! DataGridRow<T>) continue;
+        final width = measure(column, column.formattedValue(row.data));
+        if (width > widest) widest = width;
+      }
+      _columnWidths[column.field] = column.clampWidth(widest + padding);
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
+
   void resetColumnWidth(String field) {
     if (_columnWidths.remove(field) != null) notifyListeners();
   }
@@ -736,6 +809,106 @@ class GridController<T> with GridChangeNotifier {
     } else {
       selectCell(next);
     }
+  }
+
+  /// Moves the active cell by whole screenfuls, as PageUp and PageDown do.
+  ///
+  /// [rowsPerPage] comes from the adapter, which is the only side that knows
+  /// how many rows the viewport is showing. Negative [pages] moves up.
+  void movePages(int pages, {required int rowsPerPage, bool extend = false}) {
+    if (rowsPerPage <= 0) return;
+    moveActiveCell(pages * rowsPerPage, 0, extend: extend);
+  }
+
+  /// Moves the active cell to the first or last column of its row, as Home and
+  /// End do.
+  void moveToLineEdge({required bool start, bool extend = false}) {
+    final fields = visibleFields;
+    if (fields.isEmpty || _visibleRows.isEmpty) return;
+    final row = selection.activeCell?.row ?? 0;
+    final next = CellAddress(row, start ? fields.first : fields.last);
+    if (extend) {
+      extendSelectionTo(next);
+    } else {
+      selectCell(next);
+    }
+  }
+
+  /// Moves the active cell to the very first or very last cell of the grid, as
+  /// ctrl-Home and ctrl-End do.
+  void moveToGridEdge({required bool start, bool extend = false}) {
+    final fields = visibleFields;
+    if (fields.isEmpty || _visibleRows.isEmpty) return;
+    final next = start
+        ? CellAddress(0, fields.first)
+        : CellAddress(_visibleRows.length - 1, fields.last);
+    if (extend) {
+      extendSelectionTo(next);
+    } else {
+      selectCell(next);
+    }
+  }
+
+  /// Moves the active cell to the next editable cell in reading order, as Tab
+  /// does, and returns where it landed.
+  ///
+  /// Skips columns that cannot be edited and rows that are group headers,
+  /// wrapping to the next row at the end of one. With [wrap] true it also
+  /// wraps from the last editable cell round to the first, which is what makes
+  /// Tab a way to walk a form; with it false the walk stops at the end and
+  /// returns null, leaving the selection where it was.
+  ///
+  /// Returns null when the grid has no editable cell at all, which is also how
+  /// an adapter can tell that Tab should move focus out of the grid instead.
+  CellAddress? moveToNextEditableCell({
+    bool backwards = false,
+    bool wrap = true,
+  }) {
+    final fields = [
+      for (final column in visibleColumns)
+        if (column.editable) column.field,
+    ];
+    if (fields.isEmpty || _visibleRows.isEmpty) return null;
+
+    final current = selection.activeCell;
+    final all = visibleFields;
+    var row = current?.row ?? 0;
+    // Where in the editable fields the active cell sits. A cell in a column
+    // that is not editable still has a place in the order: the next editable
+    // column to its right.
+    var slot = current == null ? -1 : fields.indexOf(current.field);
+    if (current != null && slot < 0) {
+      final at = all.indexOf(current.field);
+      slot = -1;
+      for (var i = 0; i < fields.length; i++) {
+        if (all.indexOf(fields[i]) < at) slot = i;
+      }
+    }
+
+    final step = backwards ? -1 : 1;
+    final total = _visibleRows.length * fields.length;
+    for (var moved = 0; moved < total; moved++) {
+      slot += step;
+      if (slot >= fields.length) {
+        slot = 0;
+        row++;
+      } else if (slot < 0) {
+        slot = fields.length - 1;
+        row--;
+      }
+      if (row >= _visibleRows.length) {
+        if (!wrap) return null;
+        row = 0;
+      } else if (row < 0) {
+        if (!wrap) return null;
+        row = _visibleRows.length - 1;
+      }
+      if (dataAt(row) == null) continue;
+      final next = CellAddress(row, fields[slot]);
+      selectCell(next);
+      return next;
+    }
+    return null;
   }
 
   // -- Frozen rows ----------------------------------------------------------

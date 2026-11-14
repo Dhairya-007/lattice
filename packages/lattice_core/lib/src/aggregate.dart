@@ -1,6 +1,7 @@
 /// Column aggregations used by group rows and the summary footer.
 library;
 
+import 'column.dart';
 import 'compare.dart';
 
 /// Built-in aggregate functions.
@@ -24,22 +25,24 @@ class Aggregation {
     this.compute,
     String? id,
     this.label,
+    this.format,
   })  : _id = id,
         assert(
           type != AggregateType.custom || compute != null,
           'AggregateType.custom requires a compute function',
         );
 
-  const Aggregation.count(String field, {String? label})
-      : this(field, type: AggregateType.count, label: label);
-  const Aggregation.sum(String field, {String? label})
-      : this(field, type: AggregateType.sum, label: label);
-  const Aggregation.average(String field, {String? label})
-      : this(field, type: AggregateType.average, label: label);
-  const Aggregation.min(String field, {String? label})
-      : this(field, type: AggregateType.min, label: label);
-  const Aggregation.max(String field, {String? label})
-      : this(field, type: AggregateType.max, label: label);
+  const Aggregation.count(String field, {String? label, ValueFormatter? format})
+      : this(field, type: AggregateType.count, label: label, format: format);
+  const Aggregation.sum(String field, {String? label, ValueFormatter? format})
+      : this(field, type: AggregateType.sum, label: label, format: format);
+  const Aggregation.average(String field,
+      {String? label, ValueFormatter? format})
+      : this(field, type: AggregateType.average, label: label, format: format);
+  const Aggregation.min(String field, {String? label, ValueFormatter? format})
+      : this(field, type: AggregateType.min, label: label, format: format);
+  const Aggregation.max(String field, {String? label, ValueFormatter? format})
+      : this(field, type: AggregateType.max, label: label, format: format);
 
   /// Column whose values are aggregated.
   final String field;
@@ -55,8 +58,38 @@ class Aggregation {
   /// Text a UI adapter shows beside the result.
   final String? label;
 
+  /// Formats this aggregate's result for display.
+  ///
+  /// An aggregate's result is not in the same units as the column it came
+  /// from: a count of prices is a number of rows, not an amount of money, so
+  /// the column's own formatter is the wrong one to use and an adapter that
+  /// reached for it had to special-case count against sum. Set this to say
+  /// how the result reads - a currency, a percentage, "3 items".
+  final ValueFormatter? format;
+
   /// Key this aggregate is stored under in [AggregateResult].
   String get id => _id ?? '$field.${type.name}';
+
+  /// This aggregate's result as display text.
+  ///
+  /// Without a [format], an integer prints as itself and a fractional result
+  /// to two decimal places, because an average of integers is a double and
+  /// `23.333333333333332` in a footer cell is noise rather than precision.
+  /// A null result - an empty group, or one where every value was null -
+  /// prints as empty rather than as `0`, matching what [apply] returns.
+  String formatted(Object? value) {
+    final formatter = format;
+    if (formatter != null) return formatter(value);
+    if (value == null) return '';
+    if (value is int) return '$value';
+    if (value is double) {
+      if (value.isNaN || value.isInfinite) return '$value';
+      return value == value.roundToDouble()
+          ? value.toStringAsFixed(0)
+          : value.toStringAsFixed(2);
+    }
+    return '$value';
+  }
 
   /// Reduces [values] to a single result.
   ///
