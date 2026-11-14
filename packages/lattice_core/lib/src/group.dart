@@ -32,16 +32,55 @@ class GroupSpec {
   String labelFor(Object? key) =>
       labelOf != null ? labelOf!(key) : (key == null ? '(blank)' : '$key');
 
+  /// A stable string identifying which buckets this spec produces, for use as
+  /// a cache key.
+  ///
+  /// [keyOf] and [labelOf] are part of it: regrouping the same field with a
+  /// different bucketing function has to rebuild the groups, and a key of
+  /// `field:direction` alone silently served the previous buckets. Closures
+  /// written at the same place with the same captured values are `==` in
+  /// Dart, so a spec rebuilt on every frame still hits the cache.
+  String get fingerprint => '$field:${direction.name}'
+      ':${keyOf?.hashCode ?? 0}:${labelOf?.hashCode ?? 0}';
+
+  /// JSON for a saved view.
+  ///
+  /// [keyOf] and [labelOf] are functions and cannot be serialised; pass them
+  /// again through [restore] when rebuilding a spec from storage.
   Map<String, Object?> toJson() => {'field': field, 'dir': direction.name};
+
+  /// Rebuilds a spec produced by [toJson].
+  static GroupSpec fromJson(Map<String, Object?> json) => GroupSpec(
+        json['field']! as String,
+        direction: json['dir'] == 'descending'
+            ? SortDirection.descending
+            : SortDirection.ascending,
+      );
+
+  /// This spec with the bucketing functions supplied, for restoring a saved
+  /// view whose JSON could not carry them.
+  GroupSpec restore({
+    Object? Function(Object? value)? keyOf,
+    String Function(Object? key)? labelOf,
+  }) {
+    return GroupSpec(
+      field,
+      direction: direction,
+      keyOf: keyOf ?? this.keyOf,
+      labelOf: labelOf ?? this.labelOf,
+    );
+  }
 
   @override
   bool operator ==(Object other) =>
       other is GroupSpec &&
       other.field == field &&
-      other.direction == direction;
+      other.direction == direction &&
+      other.keyOf == keyOf &&
+      other.labelOf == labelOf;
 
   @override
-  int get hashCode => Object.hash(field, direction);
+  int get hashCode => Object.hash(field, direction, keyOf, labelOf);
 
   @override
   String toString() => 'group by $field';

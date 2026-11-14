@@ -38,6 +38,7 @@ class GridController<T> with GridChangeNotifier {
     int? pageSize,
     bool groupsExpandedByDefault = true,
     this.columnFit = ColumnFit.none,
+    this.rowKey,
   })  : _columns = List<GridColumn<T>>.of(columns),
         _dataSource = dataSource,
         _sorts = List<SortSpec>.of(sorts),
@@ -90,15 +91,40 @@ class GridController<T> with GridChangeNotifier {
   /// How spare horizontal space is used.
   ColumnFit columnFit;
 
+  /// Recognises a row across rebuilds: a primary key, not a position.
+  ///
+  /// Everything the user has aimed at a particular row - the selection, the
+  /// active cell, an open edit session - is stored as a row index, because an
+  /// index is what an adapter renders. An index is a position, so without a
+  /// way to recognise the row it pointed at, re-sorting or a background
+  /// refresh silently moves the user's selection onto a different row.
+  ///
+  /// Supply this and those indices are rewritten to wherever the rows went.
+  /// Leave it null and the old positional behaviour applies, which is correct
+  /// only for a grid whose order never changes under the user.
+  ///
+  /// The key must be stable for the life of a row and must implement `==` and
+  /// `hashCode` - a `String` id, an `int`, or a record of both for a composite
+  /// key. Frozen rows stay positional on purpose: see [frozenRowCount].
+  final Object Function(T row)? rowKey;
+
+  /// Whether rows can be recognised across rebuilds, i.e. [rowKey] was given.
+  bool get hasRowIdentity => rowKey != null;
+
+  /// The identity of [row], or null when no [rowKey] was supplied.
+  Object? keyFor(T row) => rowKey?.call(row);
+
   // -- Read-only view of the state ------------------------------------------
 
   List<GridColumn<T>> get columns => List.unmodifiable(_columns);
 
-  /// Columns taking part in layout, in display order.
-  List<GridColumn<T>> get visibleColumns => [
-        for (final c in _columns)
-          if (c.visible) c,
-      ];
+  /// Columns taking part in layout, in the order they appear on screen.
+  ///
+  /// Pinning moves a column on screen without moving it in the column list,
+  /// so this is [orderColumnsForDisplay] over the declared columns rather
+  /// than the list itself. Keyboard navigation, range selection and export
+  /// all read this, which is what keeps them agreeing with the screen.
+  List<GridColumn<T>> get visibleColumns => orderColumnsForDisplay<T>(_columns);
 
   Map<String, GridColumn<T>> get columnsByField =>
       {for (final c in _columns) c.field: c};
@@ -242,14 +268,88 @@ class GridController<T> with GridChangeNotifier {
   }
 
   void _apply(GridResult<T> result) {
+    // Read the identities the user is pointing at before the rows change
+    // under them.
+    final tracked = _trackedRowKeys();
+
     _result = result;
     _visibleRows = result.isGrouped
         ? flattenGroups<T>(result.groups, expansion)
         // Lazy: an ungrouped 50k-row grid must not allocate 50k wrappers on
         // every change. See [LazyDataRowList].
         : LazyDataRowList<T>(result.rows, offset: query.offset);
+
+    if (tracked != null) {
+      final positions = _rowPositions();
+      // A group header has no identity to follow, so it keeps its position.
+      // A data row whose identity is gone - filtered out, or deleted
+      // elsewhere - is dropped rather than left pointing at its neighbour.
+      int? movedFrom(int index) {
+        final identity = tracked[index];
+        return identity == null ? index : positions[identity];
+      }
+
+      selection.remapRows(movedFrom, rowCount: _visibleRows.length);
+
+      final session = _edit;
+      if (session != null) {
+        final movedTo = movedFrom(session.cell.row);
+        if (movedTo == null) {
+          // Keeping the editor open over an unrelated row would write the
+          // half-typed value into it.
+          _edit = null;
+        } else {
+          session.relocate(movedTo);
+        }
+      }
+    }
     selection.clampTo(_visibleRows.length);
     notifyListeners();
+  }
+
+  /// Identities of the rows the selection, the active cell and any open edit
+  /// are pointing at, keyed by their current index.
+  ///
+  /// Null when nothing needs tracking - no [rowKey], or nothing selected -
+  /// which is what keeps the common refresh free of a scan over every row.
+  Map<int, Object>? _trackedRowKeys() {
+    final key = rowKey;
+    if (key == null) return null;
+    final indices = <int>{...selection.rows};
+    final active = selection.activeCell;
+    if (active != null) indices.add(active.row);
+    final anchor = selection.anchor;
+    if (anchor != null) indices.add(anchor.row);
+    final range = selection.range;
+    if (range != null) {
+      indices.add(range.anchor.row);
+      indices.add(range.focus.row);
+    }
+    final session = _edit;
+    if (session != null) indices.add(session.cell.row);
+    if (indices.isEmpty) return null;
+
+    final out = <int, Object>{};
+    for (final index in indices) {
+      if (index < 0 || index >= _visibleRows.length) continue;
+      final row = _visibleRows[index];
+      if (row is DataGridRow<T>) out[index] = key(row.data);
+    }
+    return out.isEmpty ? null : out;
+  }
+
+  /// Where each row now sits, by identity.
+  Map<Object, int> _rowPositions() {
+    final key = rowKey;
+    if (key == null) return const {};
+    final out = <Object, int>{};
+    for (var i = 0; i < _visibleRows.length; i++) {
+      final row = _visibleRows[i];
+      // First occurrence wins, so a duplicated key degrades to the topmost
+      // row rather than to an arbitrary one.
+      if (row is DataGridRow<T>) out.putIfAbsent(key(row.data), () => i);
+    }
+    return out;
   }
 
   void _onSourceChanged() => refresh();
@@ -699,8 +799,14 @@ class GridController<T> with GridChangeNotifier {
   // -- Export ---------------------------------------------------------------
 
   /// Exports the current view as CSV, matching what is on screen.
+  ///
+  /// Columns are written in screen order, so a pinned column exports where
+  /// the user sees it. Pass [ExportOptions.fields] to override that.
   String exportCsv({ExportOptions options = const ExportOptions()}) {
-    final exporter = CsvExporter<T>(_columns, options: options);
+    final exporter = CsvExporter<T>(
+      options.fields == null ? visibleColumns : _columns,
+      options: options,
+    );
     final result = _result;
     if (result == null) return '';
     return exporter.exportResult(result, expansion);

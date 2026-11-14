@@ -373,7 +373,9 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   List<GroupNode<T>> _groupsFor(GridQuery query, List<T> ordered) {
     final key = '$_orderedKey\u0000$_matchedKey\u0000'
-        '${query.groups.map((g) => '${g.field}:${g.direction.name}').join(',')}'
+        // The bucketing functions are part of the key: see
+        // [GroupSpec.fingerprint].
+        '${query.groups.map((g) => g.fingerprint).join(',')}'
         '\u0000${query.aggregations.map((a) => a.id).join(',')}';
     if (_groupRevision == revision && _groupKey == key) return _groupNodes;
     final nodes = buildGroups<T>(

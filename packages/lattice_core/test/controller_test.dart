@@ -348,6 +348,24 @@ void main() {
           isFalse);
     });
 
+    test('pinning changes the order fields are reported in', () {
+      final grid = productGrid();
+      grid.setColumnPin('price', ColumnPin.start);
+      grid.setColumnPin('name', ColumnPin.end);
+      // Screen order: the leading pane, the scrolling pane, then the
+      // trailing pane - not the order the columns were declared in.
+      expect(
+          grid.visibleFields, ['price', 'category', 'stock', 'active', 'name']);
+    });
+
+    test('arrow keys move to the next column on screen, not in the list', () {
+      final grid = productGrid(selectionMode: SelectionMode.cellRange);
+      grid.setColumnPin('stock', ColumnPin.start);
+      grid.selectCell(const CellAddress(0, 'stock'));
+      grid.moveActiveCell(0, 1);
+      expect(grid.selection.activeCell!.field, 'name');
+    });
+
     test('moving a column changes display order', () {
       final grid = productGrid();
       grid.moveColumn('name', 2);
