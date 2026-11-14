@@ -22,15 +22,43 @@ sealed class GridRow<T> {
 }
 
 /// A row backed by one item of the data source.
+/// A row's place in a tree.
+///
+/// One object rather than three fields on [DataGridRow], and null for the
+/// flat and grouped cases. A grouped 50k-row grid allocates a [DataGridRow]
+/// per visible row every time anything changes, and an ungrouped one builds
+/// them on every read, so what those objects cost to construct is a
+/// measurable part of a group toggle. A tree pays one small allocation per
+/// row it actually nests; everything else pays one null field.
+class TreeRowInfo {
+  const TreeRowInfo({
+    required this.path,
+    required this.hasChildren,
+    required this.expanded,
+  });
+
+  /// Identity of this row within the tree, built from its ancestors' keys.
+  ///
+  /// Used to remember which branches are open, exactly as a group's path is.
+  final String path;
+
+  /// Whether this row has rows of its own beneath it.
+  final bool hasChildren;
+
+  /// Whether this row's children are shown.
+  final bool expanded;
+
+  @override
+  String toString() => 'TreeRowInfo($path)';
+}
+
 class DataGridRow<T> extends GridRow<T> {
   const DataGridRow({
     required super.index,
     required this.data,
     required this.sourceIndex,
     super.depth = 0,
-    this.treePath = '',
-    this.hasChildren = false,
-    this.expanded = true,
+    this.tree,
   });
 
   final T data;
@@ -39,21 +67,21 @@ class DataGridRow<T> extends GridRow<T> {
   /// source cannot provide one (remote paging).
   final int sourceIndex;
 
-  /// Identity of this row within a tree, built from its ancestors' keys.
-  ///
-  /// Empty in a flat or grouped grid. Used to remember which branches are
-  /// open, exactly as a group's path is.
-  final String treePath;
+  /// This row's place in the hierarchy, or null in a flat or grouped grid.
+  final TreeRowInfo? tree;
+
+  /// Identity of this row within a tree, empty in a flat or grouped grid.
+  String get treePath => tree?.path ?? '';
 
   /// Whether this row is a parent, i.e. it has rows of its own beneath it.
   ///
-  /// Always false in a flat or grouped grid, so an adapter can draw a
-  /// disclosure control for any row without asking what kind of grid it is in.
-  final bool hasChildren;
+  /// Always false in a flat or grouped grid, so an adapter can ask any row
+  /// without first asking what kind of grid it is in.
+  bool get hasChildren => tree?.hasChildren ?? false;
 
   /// Whether this row's children are shown. Meaningless unless
   /// [hasChildren].
-  final bool expanded;
+  bool get expanded => tree?.expanded ?? true;
 
   @override
   String toString() => 'DataGridRow($index <- $sourceIndex)';

@@ -92,9 +92,11 @@ List<GridRow<T>> flattenTree<T>({
         data: row,
         sourceIndex: -1,
         depth: depth,
-        treePath: path,
-        hasChildren: kids.isNotEmpty,
-        expanded: expanded,
+        tree: TreeRowInfo(
+          path: path,
+          hasChildren: kids.isNotEmpty,
+          expanded: expanded,
+        ),
       ));
       if (kids.isEmpty || !expanded) continue;
       walk(kids, depth + 1, path);
