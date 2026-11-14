@@ -209,29 +209,43 @@ payroll total: 829000
 
 ### Speed
 
-`dart run benchmark/grid_benchmark.dart`, median of 7 runs, milliseconds:
+`dart run benchmark/grid_benchmark.dart`, median of 7 runs, milliseconds,
+on an Apple M-series laptop:
 
 | operation | 10k rows | 50k rows |
 | --- | --- | --- |
-| first load | 0.05 | 0.39 |
-| sort by one column | 4.4 | 28.2 |
-| filter one column | 1.9 | 5.6 |
-| search, per keystroke | 1.2 | 6.5 |
-| page change | 0.01 | 0.01 |
-| group with 3 aggregates | 0.6 | 1.5 |
+| first load | 0.05 | 0.35 |
+| sort by one column | 4.5 | 27.5 |
+| sort by three columns | 8.6 | 54.3 |
+| filter one column | 1.8 | 5.2 |
+| search across every column | 3.3 | 17.0 |
+| search, per keystroke | 1.1 | 6.2 |
+| page change | 0.02 | 0.01 |
+| group with 3 aggregates | 0.2 | 1.8 |
+| toggle a group open and shut | 0.4 | 4.4 |
+| scroll window lookup x1000 | 0.30 | 0.11 |
 
-Everything except a large sort fits inside a 16.7 ms frame at 50k rows.
+Everything except a large sort and a whole-table search fits inside a 16.7 ms
+frame at 50k rows.
+
+These are measurements, not claims: **CI runs the benchmark on every pull
+request**, prints the table into the job summary, and fails the build if an
+operation goes over the ceilings checked in at
+[`benchmark/budgets.dart`](packages/lattice_core/benchmark/budgets.dart). The
+numbers above are from a developer machine; the ones in a given run's summary
+are from the runner that produced them.
 
 ## Status
 
 Pre-1.0, and honest about it:
 
 - [x] Engine: sorting, filtering, grouping, aggregates, selection, editing,
-      virtualization, export — 370 unit tests
+      virtualization, export, trees, undo — 590 unit tests, plus invariants
+      checked against 120 generated arrangements
 - [x] Flutter adapter: frozen panes, virtualized rows, inline editing,
       keyboard navigation — 95 widget tests
-- [x] Measured performance at 10k–50k rows: everything but a large sort fits
-      in a frame
+- [x] Measured performance at 10k–50k rows, gated in CI: everything but a
+      large sort fits in a frame
 - [x] Visual layer: conditional formatting, density, sticky group headers,
       change flash
 - [x] CSV exports hardened against formula injection

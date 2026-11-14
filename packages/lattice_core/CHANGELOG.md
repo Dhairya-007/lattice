@@ -1,6 +1,72 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+The release that makes the engine's own structure sound: identity instead of
+position, stated capability instead of inferred type, and a notification that
+says what changed. Five confirmed bugs are fixed with their causes, not their
+symptoms, and the API is trimmed before 1.0 makes it a promise.
+
+### Breaking
+
+Each of these is a compile error or a one-line change, not a redesign.
+
+- **`beginEdit` returns null when the data source cannot save.** A column with
+  a setter is no longer editable on a source with nowhere to put the write;
+  pass `onCommit:` to `AsyncDataSource`, or implement `canCommit` and `commit`.
+  Refusing at the door is deliberate: the alternative is the user finding out
+  after typing.
+- **`visibleColumns`, `visibleFields` and `exportCsv` report screen order**,
+  which differs from declaration order once a column is pinned. `ColumnFit.
+  lastColumn` grows the last column on screen for the same reason. A grid with
+  no pinned columns sees no change.
+- **`GroupSpec` equality includes `keyOf`, `labelOf` and `blankLabel`.** Two
+  specs that bucket rows differently used to compare equal, which is the bug
+  that made regrouping serve stale buckets; code relying on that was relying
+  on the bug.
+- **`GridRow` has a new variant, `DetailGridRow`.** An exhaustive `switch` over
+  rows needs a case for it. The compiler names every site.
+- **The pipeline helpers moved to `package:lattice_core/advanced.dart`:**
+  `sortRows`, `buildComparator`, `buildGroups`, `flattenGroups`,
+  `collectGroupPaths`, `flattenTree`, `rootsOf`, `collectTreePaths`,
+  `computeAggregates`, `computeColumnStats`, `describeHeaderProblems`, and the
+  implementation types `LazyDataRowList`, `DetailRowList`, `FloatList` and
+  `Float64ListLike`. Change the import; nothing was renamed. `RowMetrics`,
+  `layoutHeaderRow`, `computeLayout` and `orderColumnsForDisplay` stay in the
+  everyday library, because an adapter cannot draw without them.
+- **`GridQuery.toJson` and `GridViewState.toJson` carry `"v": 1`.** Readers
+  accept a document without it as version 1, so views saved by 0.2.x still
+  restore; a document from a future version is refused with a
+  `FormatException` rather than misread.
+
+### Foundations
+
+- **Rows can be identified rather than located.** `GridController.rowKey` makes
+  the selection, the active cell and an open edit session follow their rows
+  through a sort, a filter or a background refresh.
+- **One display order.** `orderColumnsForDisplay` resolves the panes, and
+  `computeLayout` uses it, so the layout, keyboard navigation, range selection
+  and the export cannot disagree about which column is next to which.
+- **Cache keys come from each spec.** `SortSpec.fingerprint`,
+  `Aggregation.fingerprint`, `GroupSpec.fingerprint` and one
+  `GridQuery` fingerprint per pipeline stage replace keys assembled by their
+  callers out of the fields they remembered.
+- **Sources declare what they can do.** `isSynchronous`/`fetchSync`,
+  `canCommit`, `providesStats`, `providesDistinctValues`, `hasMore`,
+  `supportsLazyGroups` and `supportsCancellation`, gathered into
+  `SourceCapabilities`. The engine no longer asks
+  `source is InMemoryDataSource`: any synchronous source gets the in-frame
+  path, and an adapter can stop offering what a source cannot honour.
+- **Notifications say what changed.** `GridChange` and `addChangeListener` let
+  an adapter repaint only what a change touched - clicking a cell no longer
+  looks like a new set of rows - and a batch notifies once for the union of
+  what it did. `addListener` still works and can read `lastChanges`.
+- **Invariants are tested against random arrangements.** 120 generated
+  combinations of sorting, filtering, searching, grouping, paging, pinning and
+  hiding, checked against the rules that have to hold for all of them. Three of
+  them fail if the display-order bug is put back.
+- **The benchmark runs in CI**, publishes its table to the job summary, and
+  fails the build on a breach of the ceilings in `benchmark/budgets.dart`.
 
 ### Fixed
 
@@ -77,6 +143,28 @@
   as engine behaviour rather than arithmetic in a widget.
 - `keepRowsOnError`, off by default, keeps the last good rows on screen when a
   poll fails instead of blanking the grid.
+- **Loading more instead of paging** (#25). `loadMoreSize` turns the grid into
+  an accumulating list: the first fetch asks for one slice and each
+  `loadMore()` appends another, with `canLoadMore` false while a request is
+  out so a scroll that reaches the end twice asks once. Changing the ordering
+  or the filter starts again from one slice. `reload()` is what pull to
+  refresh means.
+- **Detail panels** (#14). `DetailGridRow` is a row in the flat list, so
+  virtualization and the frozen bands count it, and its height is stated
+  rather than measured because a prefix-sum table cannot wait for a layout
+  pass. `toggleDetail` is keyed by row identity, so a sort cannot move a panel
+  onto another row, and an open panel does not cost a 50k-row
+  materialisation.
+- **Lazily loaded tree children** (#15). `TreeSpec.childrenLoader` fetches a
+  branch when it is opened, `hasChildren` draws the control before the
+  children exist, a loading branch says so rather than looking empty, and one
+  that fails reports through `childrenError` without being retried every
+  frame.
+- **`GroupSpec.blankLabel`** (#28), so the one piece of user-visible text the
+  engine owns can be given in any language. It is a field rather than a
+  lookup because `lattice_core` must not grow a dependency on anyone's
+  localisations; the validator messages have always taken theirs the same
+  way.
 
 ## 0.2.0
 
