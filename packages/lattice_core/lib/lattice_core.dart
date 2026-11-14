@@ -27,5 +27,6 @@ export 'src/rows.dart';
 export 'src/selection.dart';
 export 'src/sort.dart';
 export 'src/stacked_header.dart';
+export 'src/tree.dart';
 export 'src/view_state.dart';
 export 'src/virtualization.dart';

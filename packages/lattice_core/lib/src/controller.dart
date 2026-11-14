@@ -21,6 +21,7 @@ import 'rows.dart';
 import 'selection.dart';
 import 'sort.dart';
 import 'stacked_header.dart';
+import 'tree.dart';
 import 'view_state.dart';
 
 /// Owns every piece of grid state and the pipeline that turns it into rows.
@@ -48,6 +49,8 @@ class GridController<T> with GridChangeNotifier {
     this.fetchDebounce,
     this.keepRowsOnError = false,
     this.lazyGrouping = false,
+    this.tree,
+    bool treeExpandedByDefault = true,
   })  : _columns = List<GridColumn<T>>.of(columns),
         _dataSource = dataSource,
         _sorts = List<SortSpec>.of(sorts),
@@ -60,7 +63,14 @@ class GridController<T> with GridChangeNotifier {
         _pageSize = pageSize,
         selection = SelectionState(mode: selectionMode),
         expansion =
-            GroupExpansionState(expandedByDefault: groupsExpandedByDefault) {
+            GroupExpansionState(expandedByDefault: groupsExpandedByDefault),
+        treeExpansion =
+            GroupExpansionState(expandedByDefault: treeExpandedByDefault) {
+    assert(
+      tree == null || rowKey != null,
+      'A tree needs a rowKey: a branch is remembered by the identity of the '
+      'rows above it.',
+    );
     _dataSource.columns = columnsByField;
     _dataSource.addListener(_onSourceChanged);
     refresh();
@@ -96,6 +106,24 @@ class GridController<T> with GridChangeNotifier {
 
   /// Which group headers are open.
   final GroupExpansionState expansion;
+
+  /// Which tree branches are open, keyed by [DataGridRow.treePath].
+  ///
+  /// Separate from [expansion] because a grid can be grouped or a tree but
+  /// the two states mean different things, and closing a group should not
+  /// close a branch that happens to share a key.
+  final GroupExpansionState treeExpansion;
+
+  /// The parent/child hierarchy among the rows, if there is one.
+  ///
+  /// Null for a flat grid. Ignored while the grid is grouped: a tree inside a
+  /// group is two hierarchies drawn in one column of indentation, which
+  /// cannot be read.
+  final TreeSpec<T>? tree;
+
+  /// Whether rows are being shown as a tree, i.e. [tree] is set and the grid
+  /// is not grouped.
+  bool get isTree => tree != null && !isGrouped;
 
   /// How spare horizontal space is used.
   ColumnFit columnFit;
@@ -368,19 +396,27 @@ class GridController<T> with GridChangeNotifier {
     final tracked = _trackedRowKeys();
 
     _result = result;
+    final hierarchy = tree;
     _visibleRows = result.isGrouped
         ? flattenGroups<T>(
             _mergeLoadedGroups(result.groups),
             expansion,
             loadingPaths: _loadingGroups,
           )
-        // Lazy: an ungrouped 50k-row grid must not allocate 50k wrappers on
-        // every change. See [LazyDataRowList].
-        : LazyDataRowList<T>(
-            result.rows,
-            offset: query.offset,
-            substitute: _pendingWrites.isEmpty ? null : _substituteWrite,
-          );
+        : hierarchy != null
+            ? flattenTree<T>(
+                rows: result.rows,
+                spec: hierarchy,
+                keyOf: rowKey!,
+                expansion: treeExpansion,
+              )
+            // Lazy: an ungrouped 50k-row grid must not allocate 50k wrappers
+            // on every change. See [LazyDataRowList].
+            : LazyDataRowList<T>(
+                result.rows,
+                offset: query.offset,
+                substitute: _pendingWrites.isEmpty ? null : _substituteWrite,
+              );
 
     if (tracked != null) {
       final positions = _rowPositions();
@@ -697,6 +733,37 @@ class GridController<T> with GridChangeNotifier {
   void _reapply() {
     final result = _result;
     if (result != null) _apply(result);
+  }
+
+  // -- Tree rows ------------------------------------------------------------
+
+  /// Opens or closes one branch, addressed by [DataGridRow.treePath].
+  void toggleRow(String path) {
+    treeExpansion.toggle(path);
+    _reapply();
+  }
+
+  void setRowExpanded(String path, bool expanded) {
+    treeExpansion.setExpanded(path, expanded);
+    _reapply();
+  }
+
+  void expandAllRows() {
+    treeExpansion.expandAll();
+    _reapply();
+  }
+
+  /// Closes every branch, including ones the user has never opened.
+  void collapseAllRows() {
+    final hierarchy = tree;
+    final result = _result;
+    if (hierarchy == null || result == null) return;
+    treeExpansion.collapseAll(collectTreePaths<T>(
+      rows: result.rows,
+      spec: hierarchy,
+      keyOf: rowKey!,
+    ));
+    _reapply();
   }
 
   // -- Columns --------------------------------------------------------------

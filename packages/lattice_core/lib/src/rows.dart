@@ -28,6 +28,9 @@ class DataGridRow<T> extends GridRow<T> {
     required this.data,
     required this.sourceIndex,
     super.depth = 0,
+    this.treePath = '',
+    this.hasChildren = false,
+    this.expanded = true,
   });
 
   final T data;
@@ -35,6 +38,22 @@ class DataGridRow<T> extends GridRow<T> {
   /// Index of [data] in the unsorted, unfiltered source list, or -1 when the
   /// source cannot provide one (remote paging).
   final int sourceIndex;
+
+  /// Identity of this row within a tree, built from its ancestors' keys.
+  ///
+  /// Empty in a flat or grouped grid. Used to remember which branches are
+  /// open, exactly as a group's path is.
+  final String treePath;
+
+  /// Whether this row is a parent, i.e. it has rows of its own beneath it.
+  ///
+  /// Always false in a flat or grouped grid, so an adapter can draw a
+  /// disclosure control for any row without asking what kind of grid it is in.
+  final bool hasChildren;
+
+  /// Whether this row's children are shown. Meaningless unless
+  /// [hasChildren].
+  final bool expanded;
 
   @override
   String toString() => 'DataGridRow($index <- $sourceIndex)';
