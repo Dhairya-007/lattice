@@ -19,6 +19,7 @@ import 'rows.dart';
 import 'selection.dart';
 import 'sort.dart';
 import 'stacked_header.dart';
+import 'view_state.dart';
 
 /// Owns every piece of grid state and the pipeline that turns it into rows.
 ///
@@ -1041,6 +1042,94 @@ class GridController<T> with GridChangeNotifier {
       }
     }
     return toClipboardText<T>(rows);
+  }
+
+  // -- Saved views ----------------------------------------------------------
+
+  /// The current arrangement, ready to be stored as JSON.
+  ///
+  /// Covers everything the user set: the ordering, the filters and the search,
+  /// the grouping and which groups they closed, the page, and the column
+  /// widths, order, pinning and visibility. What it cannot cover is code - an
+  /// [Aggregation]'s reducer, a column's accessors, a [GroupSpec]'s bucketing
+  /// functions - which stay with the definitions the grid is built from.
+  GridViewState saveState() {
+    return GridViewState(
+      sorts: _sorts,
+      filter: _filter,
+      columnFilters: Map<String, FilterCondition>.of(_columnFilters),
+      search: _search,
+      groups: _groups,
+      collapsedGroupPaths: expansion.overrides.toList(),
+      columns: [
+        for (final c in _columns)
+          ColumnViewState(
+            field: c.field,
+            // Only a width the user actually dragged.
+            width: _columnWidths[c.field],
+            visible: c.visible,
+            pin: c.pin,
+          ),
+      ],
+      pageIndex: _pageIndex,
+      pageSize: _pageSize,
+      frozenRowCount: _frozenRowCount,
+      frozenRowCountBottom: _frozenRowCountBottom,
+      columnFit: columnFit,
+    );
+  }
+
+  /// Applies a saved arrangement and re-queries once.
+  ///
+  /// Columns in the view that the grid does not have are ignored, and columns
+  /// the grid has that the view does not know about keep their definitions and
+  /// follow the restored ones - so a view saved before a column was added
+  /// still restores, with the new column at the end.
+  ///
+  /// [resolveGroup] is given each restored [GroupSpec] and returns the one to
+  /// use, which is how a grouping with a `keyOf` survives the round trip: the
+  /// JSON remembers the field, your code supplies the function.
+  void restoreState(
+    GridViewState state, {
+    GroupSpec Function(GroupSpec restored)? resolveGroup,
+  }) {
+    if (state.columns.isNotEmpty) {
+      final byField = {for (final c in _columns) c.field: c};
+      final restored = <GridColumn<T>>[];
+      _columnWidths.clear();
+      for (final saved in state.columns) {
+        final column = byField.remove(saved.field);
+        if (column == null) continue;
+        restored.add(column.copyWith(visible: saved.visible, pin: saved.pin));
+        final width = saved.width;
+        if (width != null) _columnWidths[saved.field] = width;
+      }
+      // Columns the view never saw keep their place relative to each other.
+      for (final column in _columns) {
+        if (byField.containsKey(column.field)) restored.add(column);
+      }
+      _columns = restored;
+      _dataSource.columns = columnsByField;
+    }
+
+    _sorts = List<SortSpec>.of(state.sorts);
+    _filter = state.filter;
+    _columnFilters
+      ..clear()
+      ..addAll(state.columnFilters);
+    _search = state.search;
+    _groups = [
+      for (final g in state.groups) resolveGroup == null ? g : resolveGroup(g),
+    ];
+    expansion.setOverrides(state.collapsedGroupPaths);
+    _pageSize = state.pageSize;
+    _pageIndex = state.pageIndex < 0 ? 0 : state.pageIndex;
+    _frozenRowCount = state.frozenRowCount;
+    _frozenRowCountBottom = state.frozenRowCountBottom;
+    columnFit = state.columnFit;
+    // One query for the whole restore: setting these one at a time would send
+    // a request per property.
+    refresh();
   }
 
   /// Swaps the data source, e.g. from a local list to a server-backed one.

@@ -77,6 +77,20 @@ class GroupExpansionState {
   /// Paths whose state differs from [expandedByDefault].
   final Set<String> _overrides;
 
+  /// The paths the user has changed from the default, for a saved view.
+  ///
+  /// Saving the overrides rather than the open paths is what lets a restored
+  /// view stay correct when the data has grown: a group the user never
+  /// touched takes the grid's default, whenever it first appeared.
+  Set<String> get overrides => Set.unmodifiable(_overrides);
+
+  /// Replaces the override set, as restoring a saved view does.
+  void setOverrides(Iterable<String> paths) {
+    _overrides
+      ..clear()
+      ..addAll(paths);
+  }
+
   bool isExpanded(String path) =>
       _overrides.contains(path) ? !expandedByDefault : expandedByDefault;
 

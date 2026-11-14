@@ -96,6 +96,38 @@ class GridQuery {
         if (limit != null) 'limit': limit,
       };
 
+  /// Rebuilds a query produced by [toJson].
+  ///
+  /// [aggregations] cannot be serialised - an [Aggregation] may carry a
+  /// reducer function - so they are passed back in. Neither is the
+  /// cancellation [signal], which belongs to one attempt rather than to the
+  /// query, nor a [GroupSpec]'s bucketing functions; see [GroupSpec.restore].
+  static GridQuery fromJson(
+    Map<String, Object?> json, {
+    List<Aggregation> aggregations = const [],
+  }) {
+    return GridQuery(
+      sorts: [
+        for (final s in (json['sorts'] as List? ?? const []))
+          SortSpec.fromJson((s as Map).cast<String, Object?>()),
+      ],
+      filter: json['filter'] == null
+          ? null
+          : Filter.fromJson((json['filter']! as Map).cast<String, Object?>()),
+      search: json['search'] as String? ?? '',
+      searchFields: [
+        for (final f in (json['searchFields'] as List? ?? const [])) '$f',
+      ],
+      groups: [
+        for (final g in (json['groups'] as List? ?? const []))
+          GroupSpec.fromJson((g as Map).cast<String, Object?>()),
+      ],
+      aggregations: aggregations,
+      offset: (json['offset'] as num?)?.toInt() ?? 0,
+      limit: (json['limit'] as num?)?.toInt(),
+    );
+  }
+
   @override
   String toString() => 'GridQuery(${toJson()})';
 }
