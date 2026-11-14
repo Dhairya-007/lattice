@@ -154,12 +154,20 @@ List<GridRow<T>> flattenGroups<T>(
 /// equal in content but not identical. Compare [DataGridRow.data] or
 /// [GridRow.index] rather than identity.
 class LazyDataRowList<T> extends ListBase<GridRow<T>> {
-  LazyDataRowList(this._rows, {this.offset = 0});
+  LazyDataRowList(this._rows, {this.offset = 0, T Function(T row)? substitute})
+      : _substitute = substitute;
 
   final List<T> _rows;
 
   /// Index of the first row in the unfiltered source, for remote paging.
   final int offset;
+
+  /// Replaces a row as it is read, or null to read it through unchanged.
+  ///
+  /// This is how an edit that has been committed but not yet confirmed by a
+  /// remote source stays on screen: the substitution happens per read, so a
+  /// grid with no pending write pays nothing for it.
+  final T Function(T row)? _substitute;
 
   @override
   int get length => _rows.length;
@@ -169,11 +177,15 @@ class LazyDataRowList<T> extends ListBase<GridRow<T>> {
       throw UnsupportedError('The grid row list is read-only.');
 
   @override
-  GridRow<T> operator [](int index) => DataGridRow<T>(
-        index: index,
-        data: _rows[index],
-        sourceIndex: offset + index,
-      );
+  GridRow<T> operator [](int index) {
+    final row = _rows[index];
+    final substitute = _substitute;
+    return DataGridRow<T>(
+      index: index,
+      data: substitute == null ? row : substitute(row),
+      sourceIndex: offset + index,
+    );
+  }
 
   @override
   void operator []=(int index, GridRow<T> value) =>

@@ -277,7 +277,11 @@ class GridController<T> with GridChangeNotifier {
         ? flattenGroups<T>(result.groups, expansion)
         // Lazy: an ungrouped 50k-row grid must not allocate 50k wrappers on
         // every change. See [LazyDataRowList].
-        : LazyDataRowList<T>(result.rows, offset: query.offset);
+        : LazyDataRowList<T>(
+            result.rows,
+            offset: query.offset,
+            substitute: _pendingWrites.isEmpty ? null : _substituteWrite,
+          );
 
     if (tracked != null) {
       final positions = _rowPositions();
@@ -482,6 +486,12 @@ class GridController<T> with GridChangeNotifier {
     final result = _result;
     if (result == null || !result.isGrouped) return;
     _apply(result);
+  }
+
+  /// Rebuilds the visible rows from the last result, whatever shape it has.
+  void _reapply() {
+    final result = _result;
+    if (result != null) _apply(result);
   }
 
   // -- Columns --------------------------------------------------------------
@@ -738,10 +748,16 @@ class GridController<T> with GridChangeNotifier {
   // -- Editing --------------------------------------------------------------
 
   /// Opens an edit session, if the cell is editable. Returns null otherwise.
+  ///
+  /// A cell is editable when its column has a setter *and* the data source can
+  /// write rows back. Refusing at the door is deliberate: an editor the grid
+  /// cannot save is a worse outcome than no editor, because the user only
+  /// finds out after typing.
   EditSession<T>? beginEdit(CellAddress cell) {
     final column = this.column(cell.field);
     final data = dataAt(cell.row);
     if (column == null || data == null || !column.editable) return null;
+    if (!_dataSource.canCommit) return null;
     _edit = EditSession<T>(
       cell: cell,
       column: column,
@@ -758,10 +774,19 @@ class GridController<T> with GridChangeNotifier {
     notifyListeners();
   }
 
-  /// Validates and writes the edit back to the source.
+  /// Validates and writes the edit back through [LatticeDataSource.commit].
   ///
   /// A rejected edit keeps the session open with its error set, so the user
   /// can correct the value instead of losing it.
+  ///
+  /// The write itself is asynchronous, because a remote source has a round
+  /// trip to make, and this returns as soon as the value has passed
+  /// validation. The new value is on screen from that moment: it is held as a
+  /// pending write and substituted into whatever the source returns next, so
+  /// the re-fetch that follows a write cannot show the old value again. If the
+  /// write throws, the pending value is dropped - the cell goes back to what
+  /// the source holds - and the reason appears in [writeError]. Await
+  /// [pendingWrite] to observe the outcome.
   EditResult<T> commitEdit() {
     final session = _edit;
     if (session == null) return const EditResult<Never>.cancelled();
@@ -771,20 +796,100 @@ class GridController<T> with GridChangeNotifier {
       return result;
     }
     _edit = null;
-    final source = _dataSource;
     final row = result.row;
-    if (row != null && source is InMemoryDataSource<T>) {
-      final sourceRows = source.rows;
-      final index = sourceRows.indexOf(session.row);
-      if (index >= 0) {
-        // Writes through the source, which notifies and re-runs the query, so
-        // an edit that changes the sort key moves the row immediately.
-        source.replaceAt(index, row);
-        return result;
-      }
+    if (row == null) {
+      notifyListeners();
+      return result;
     }
-    source.invalidate();
+    _pendingWrite = _write(session.row, row);
     return result;
+  }
+
+  /// Rows written but not yet confirmed by the source, keyed by identity.
+  final Map<Object, T> _pendingWrites = {};
+  Object? _writeError;
+  Future<void>? _pendingWrite;
+
+  /// Whether an edit has been committed and not yet confirmed by the source.
+  bool get hasPendingWrites => _pendingWrites.isNotEmpty;
+
+  /// Error thrown by the last write, if it failed.
+  ///
+  /// Distinct from [error], which is a failed fetch: a rejected write leaves
+  /// the rows on screen intact and only means one value did not save.
+  Object? get writeError => _writeError;
+
+  void clearWriteError() {
+    if (_writeError == null) return;
+    _writeError = null;
+    notifyListeners();
+  }
+
+  /// The write in flight, for tests and for a UI that wants to await it.
+  Future<void>? get pendingWrite => _pendingWrite;
+
+  /// Whether cells can be edited at all, i.e. the source can write rows back.
+  bool get canEdit => _dataSource.canCommit;
+
+  /// Identity used to match a pending write to a fetched row.
+  ///
+  /// Falls back to the row object itself when there is no [rowKey], which is
+  /// right for a source that hands back the same instances and is the reason
+  /// an immutable model wants a [rowKey].
+  Object _identityOf(T row) => rowKey?.call(row) ?? row as Object;
+
+  T _substituteWrite(T row) => _pendingWrites[_identityOf(row)] ?? row;
+
+  /// Sends a committed row to the source, showing it immediately and rolling
+  /// it back if the source refuses it.
+  Future<void> _write(T original, T updated) async {
+    final source = _dataSource;
+    if (!source.canCommit) {
+      // beginEdit refuses a read-only source, so reaching this means the
+      // source was swapped mid-edit.
+      _writeError = UnsupportedError(
+        '${source.runtimeType} cannot save edits.',
+      );
+      notifyListeners();
+      return;
+    }
+
+    if (source.isLocal) {
+      // A local source answers synchronously and its own write-through
+      // refresh already shows the new value; an overlay would only buy a
+      // second rebuild.
+      try {
+        await source.commit(original, updated);
+      } catch (error) {
+        if (isDisposed) return;
+        _writeError = error;
+        notifyListeners();
+      }
+      return;
+    }
+
+    final key = _identityOf(original);
+    _pendingWrites[key] = updated;
+    _writeError = null;
+    _reapply();
+    try {
+      final stored = await source.commit(original, updated);
+      if (isDisposed) return;
+      // The source may have normalised the value; show what it returned.
+      _pendingWrites[key] = stored;
+      // Re-query, so an edit that changed a sort or filter key moves its row.
+      // The pending value covers the gap until the source's own copy of the
+      // row carries it.
+      await refresh();
+      if (isDisposed) return;
+      _pendingWrites.remove(key);
+      _reapply();
+    } catch (error) {
+      if (isDisposed) return;
+      _pendingWrites.remove(key);
+      _writeError = error;
+      _reapply();
+    }
   }
 
   void cancelEdit() {

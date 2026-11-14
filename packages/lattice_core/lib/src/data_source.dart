@@ -48,6 +48,28 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
   /// Resolves [query].
   Future<GridResult<T>> fetch(GridQuery query);
 
+  /// Whether this source can write an edited row back.
+  ///
+  /// False by default, because a source that only answers [fetch] has nowhere
+  /// to put a write. The grid asks before it opens an editor, so a read-only
+  /// source does not offer editing it cannot honour.
+  bool get canCommit => false;
+
+  /// Writes [updated] back in place of [original].
+  ///
+  /// Returns the row as the source now holds it, which need not be [updated]:
+  /// a server may normalise a value or fill in a timestamp, and the grid shows
+  /// what comes back. Throwing rejects the edit, and the grid rolls its
+  /// optimistic update back and reports the error.
+  ///
+  /// Only called when [canCommit] is true.
+  Future<T> commit(T original, T updated) {
+    throw UnsupportedError(
+      '$runtimeType cannot write rows back. Override commit and canCommit to '
+      'support editing.',
+    );
+  }
+
   /// Range of the values currently shown in [field], for conditional
   /// formatting. Sources that cannot answer cheaply return
   /// [ColumnStats.empty], which leaves rules inert rather than wrong.
@@ -137,6 +159,21 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     _rows = <T>[];
     bumpRevision();
     notifyListeners();
+  }
+
+  @override
+  bool get canCommit => true;
+
+  @override
+  Future<T> commit(T original, T updated) async {
+    final index = _rows.indexOf(original);
+    if (index < 0) {
+      throw StateError('The edited row is no longer in the source.');
+    }
+    // Writes through the list, which notifies and re-runs the query, so an
+    // edit that changes the sort key moves its row immediately.
+    replaceAt(index, updated);
+    return updated;
   }
 
   @override
@@ -396,12 +433,23 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 /// The quickest way to point a grid at an HTTP endpoint: translate the
 /// [GridQuery] into request parameters and return the page the server sent.
 class AsyncDataSource<T> extends LatticeDataSource<T> {
-  AsyncDataSource(this._fetch);
+  AsyncDataSource(this._fetch,
+      {Future<T> Function(T original, T updated)? onCommit})
+      : _commit = onCommit;
 
   final Future<GridResult<T>> Function(GridQuery query) _fetch;
+  final Future<T> Function(T original, T updated)? _commit;
 
   @override
   Future<GridResult<T>> fetch(GridQuery query) => _fetch(query);
+
+  /// Editable only when an [onCommit] was supplied: there is otherwise no
+  /// endpoint to send the write to.
+  @override
+  bool get canCommit => _commit != null;
+
+  @override
+  Future<T> commit(T original, T updated) => _commit!(original, updated);
 }
 
 /// Convenience filter for a quick-search box, matching [needle] against any of
