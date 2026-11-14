@@ -1,5 +1,83 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Column order followed the column list, not the screen.** Pinning moves a
+  column on screen without moving it in the list, so arrow keys skipped
+  columns, a range selection covered cells that were not next to each other,
+  and a CSV export's header did not match the header the user was looking at.
+  `orderColumnsForDisplay` resolves the panes, and `visibleColumns`,
+  `visibleFields` and `exportCsv` read it.
+- **A selection followed the screen position, not the row.** Indices are what
+  an adapter renders, so selecting a row and then sorting left the selection
+  on whatever row had moved into that slot - and a background refresh of an
+  async source could move it silently. `GridController.rowKey` makes rows
+  recognisable; the selection, the active cell and an open edit session are
+  rewritten to wherever their rows went.
+- **The group cache ignored `keyOf` and `labelOf`.** The memo key was
+  `field:direction`, so regrouping the same field with a different bucketing
+  function served the previous buckets. `GroupSpec.fingerprint` carries both,
+  and `GroupSpec` equality no longer claims two differently bucketed specs are
+  the same.
+- **Edits to anything but an in-memory source were lost.** `commitEdit`
+  invalidated the source and let the grid re-fetch, which threw the new value
+  away: the commit reported success and the cell went back to the old text.
+  See the write path below.
+
+### Added
+
+- **A write path on `LatticeDataSource`.** `canCommit`, `commit(original,
+  updated)` and `commitAll` for a batch. The controller applies a write
+  optimistically, keeps it across the re-fetch that follows, and rolls it back
+  with `writeError` set if the source throws. `beginEdit` refuses a source
+  that cannot save, so the user learns before typing rather than after.
+- **Cancellation and debounce.** `GridQuery.signal` is a `FetchSignal` the
+  grid cancels when a newer query supersedes the fetch, so a source can abort
+  the request instead of running it to completion for an answer nobody will
+  read. `fetchDebounce` folds the interactions a user drives a character at a
+  time - the search box, the filter row - into one request, for non-local
+  sources only.
+- **Server-side and lazy grouping.** `GridQuery.lazyGroups` asks a source
+  that can for group headers and counts alone, and
+  `fetchGroupChildren` resolves a group when the user opens it. Grouping no
+  longer means downloading every matching row.
+- **Saved views.** `GridViewState` carries the ordering, the filters, the
+  search, the grouping, which groups are closed, the page, and the column
+  widths, order, pinning and visibility, as plain JSON.
+  `saveState`/`restoreState` apply it in one query, and `GridQuery.fromJson`
+  and `GroupSpec.fromJson` complete the round trip.
+- **Paste into a cell range.** `pasteText` is the inverse of
+  `copySelectionAsText`: it parses the text, coerces each cell into its
+  column's type, validates it, and writes the block as one change - all or
+  nothing by default.
+- **Undo and redo.** `undo()`, `redo()` and a bounded `EditHistory` over
+  committed edits. History is per cell, so it works for an in-place row model
+  as well as an immutable one, and per action, so a paste comes back in one
+  step.
+- **The filter metadata `ColumnType` already promised.**
+  `operatorsFor(ColumnType)` ships the operator set, with `needsValue`,
+  `needsSecondValue` and `defaultLabel` for the control beside it.
+  `distinctValuesFor(field)` gives a checkbox filter its values, cached like
+  `statsFor`. `GridResult.stats` lets a remote source supply the ranges
+  conditional formatting needs - a data bar over a server-paged column drew
+  nothing before.
+- **Auto-sizing.** `autoSizeColumn(field, measure:)` and `autoSizeColumns`
+  sample the rows and ask the caller to measure the text, which is the one
+  thing the engine cannot do itself.
+- **Tree data.** `TreeSpec`, with either `childrenOf` for a nested model or
+  `parentOf` for a flat table with a parent reference, shows rows as a
+  hierarchy - an org chart, a file browser, a bill of materials - as distinct
+  from grouping, whose parents are invented from a shared value.
+- `Aggregation.format`, so a count of prices can read as a number of rows and
+  a sum as an amount of money.
+- `movePages`, `moveToLineEdge`, `moveToGridEdge` and
+  `moveToNextEditableCell`: PageUp/PageDown, Home/End and Tab-to-next-editable
+  as engine behaviour rather than arithmetic in a widget.
+- `keepRowsOnError`, off by default, keeps the last good rows on screen when a
+  poll fails instead of blanking the grid.
+
 ## 0.2.0
 
 New API, nothing removed or renamed.
