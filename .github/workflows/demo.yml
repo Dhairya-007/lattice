@@ -15,6 +15,13 @@ name: Demo
 on:
   push:
     branches: [main]
+  # Also on a pull request that touches the demo or this workflow, so a
+  # change here is verified before it is merged rather than by turning main
+  # red afterwards.
+  pull_request:
+    paths:
+      - '.github/workflows/demo.yml'
+      - 'packages/lattice_flutter/**'
   workflow_dispatch:
 
 concurrency:
@@ -36,6 +43,18 @@ jobs:
       - name: Install dependencies
         working-directory: packages/lattice_flutter/example
         run: flutter pub get
+
+      # The example is a Flutter package with no platform scaffolding checked
+      # in - no web/index.html, no icons - because none of it is written by
+      # hand and all of it is generated from the SDK version in use. Creating
+      # it here keeps the repository to the code someone would read, and
+      # committing a web/ directory later overrides this.
+      - name: Add the web scaffolding
+        working-directory: packages/lattice_flutter/example
+        run: |
+          if [ ! -d web ]; then
+            flutter create . --platforms web --project-name lattice_example
+          fi
 
       # --base-href makes the asset paths work under /lattice/, which is
       # where a project Pages site lives.
