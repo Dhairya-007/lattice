@@ -35,6 +35,7 @@ class TreeRowInfo {
     required this.path,
     required this.hasChildren,
     required this.expanded,
+    this.loading = false,
   });
 
   /// Identity of this row within the tree, built from its ancestors' keys.
@@ -47,6 +48,13 @@ class TreeRowInfo {
 
   /// Whether this row's children are shown.
   final bool expanded;
+
+  /// Whether the grid is waiting for this row's children.
+  ///
+  /// Only ever true for a lazily loaded tree: the row is on screen, its
+  /// children are in flight, and an open branch should say so rather than
+  /// look empty.
+  final bool loading;
 
   @override
   String toString() => 'TreeRowInfo($path)';
@@ -83,8 +91,46 @@ class DataGridRow<T> extends GridRow<T> {
   /// [hasChildren].
   bool get expanded => tree?.expanded ?? true;
 
+  /// Whether the grid is waiting for this row's children to arrive.
+  bool get isLoadingChildren => tree?.loading ?? false;
+
   @override
   String toString() => 'DataGridRow($index <- $sourceIndex)';
+}
+
+/// A panel opened under its row, for the fields a row has no room for.
+///
+/// A row of a grid holds a dozen fields and a record usually has more, so the
+/// common answer is a panel underneath holding whatever the application wants
+/// to draw. It is a row in the flat list rather than something the widget
+/// layer bolts on, because everything that walks rows - virtualization,
+/// scroll-to-reveal, keyboard navigation, the frozen bands - has to count it.
+///
+/// The engine decides that it is there and how tall it is; what goes in it is
+/// the adapter's business.
+class DetailGridRow<T> extends GridRow<T> {
+  const DetailGridRow({
+    required super.index,
+    required this.data,
+    required this.rowKey,
+    required this.height,
+    super.depth = 0,
+  });
+
+  /// The row this panel belongs to.
+  final T data;
+
+  /// Identity of that row, which is what the open state is keyed by.
+  final Object rowKey;
+
+  /// How tall the panel is, in logical pixels.
+  ///
+  /// Stated by the engine so that row offsets can be computed without
+  /// measuring a widget: a prefix-sum table cannot wait for a layout pass.
+  final double height;
+
+  @override
+  String toString() => 'DetailGridRow($rowKey)';
 }
 
 /// A collapsible group header row.
@@ -262,6 +308,146 @@ class LazyDataRowList<T> extends ListBase<GridRow<T>> {
       index: index,
       data: substitute == null ? row : substitute(row),
       sourceIndex: offset + index,
+    );
+  }
+
+  @override
+  void operator []=(int index, GridRow<T> value) =>
+      throw UnsupportedError('The grid row list is read-only.');
+}
+
+/// Inserts a [DetailGridRow] after every row whose panel is open, renumbering
+/// the rows as it goes.
+///
+/// For a list that is already materialised - a grouped or tree flattening.
+/// The flat case has [DetailRowList], which does the same thing without
+/// building anything.
+List<GridRow<T>> withDetailRows<T>(
+  List<GridRow<T>> rows, {
+  required Set<Object> open,
+  required double height,
+  required Object Function(T row) keyOf,
+}) {
+  if (open.isEmpty) return rows;
+  final out = <GridRow<T>>[];
+  for (final row in rows) {
+    final renumbered = row is DataGridRow<T>
+        ? DataGridRow<T>(
+            index: out.length,
+            data: row.data,
+            sourceIndex: row.sourceIndex,
+            depth: row.depth,
+            tree: row.tree,
+          )
+        : row is GroupGridRow<T>
+            ? GroupGridRow<T>(
+                index: out.length,
+                depth: row.depth,
+                node: row.node,
+                expanded: row.expanded,
+                loading: row.loading,
+              )
+            : row;
+    out.add(renumbered);
+    if (row is! DataGridRow<T>) continue;
+    final key = keyOf(row.data);
+    if (!open.contains(key)) continue;
+    out.add(DetailGridRow<T>(
+      index: out.length,
+      data: row.data,
+      rowKey: key,
+      height: height,
+      depth: row.depth,
+    ));
+  }
+  return out;
+}
+
+/// A row list that interleaves open detail panels without materialising
+/// anything.
+///
+/// One open panel must not cost 50k wrapper objects, so the visual index is
+/// resolved arithmetically: the panels are held as the sorted data indices
+/// they belong to, and a read works out how many of them precede the index
+/// being read.
+class DetailRowList<T> extends ListBase<GridRow<T>> {
+  DetailRowList(
+    this._rows, {
+    required List<int> openAt,
+    required this.height,
+    required this.keyOf,
+    this.offset = 0,
+    T Function(T row)? substitute,
+  })  : _openAt = openAt,
+        _substitute = substitute;
+
+  final List<T> _rows;
+
+  /// Data indices whose panel is open, ascending.
+  final List<int> _openAt;
+
+  final double height;
+  final Object Function(T row) keyOf;
+  final int offset;
+  final T Function(T row)? _substitute;
+
+  @override
+  int get length => _rows.length + _openAt.length;
+
+  @override
+  set length(int value) =>
+      throw UnsupportedError('The grid row list is read-only.');
+
+  /// How many open panels sit strictly before data index [row].
+  int _openBefore(int row) {
+    var low = 0;
+    var high = _openAt.length;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      if (_openAt[mid] < row) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  }
+
+  /// Visual position of data index [row].
+  int _positionOf(int row) => row + _openBefore(row);
+
+  @override
+  GridRow<T> operator [](int index) {
+    // The largest data index whose row starts at or before [index]. The
+    // mapping is monotonic, so this is a binary search.
+    var low = 0;
+    var high = _rows.length - 1;
+    var found = 0;
+    while (low <= high) {
+      final mid = (low + high) >> 1;
+      if (_positionOf(mid) <= index) {
+        found = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    final substitute = _substitute;
+    final raw = _rows[found];
+    final data = substitute == null ? raw : substitute(raw);
+    if (_positionOf(found) == index) {
+      return DataGridRow<T>(
+        index: index,
+        data: data,
+        sourceIndex: offset + found,
+      );
+    }
+    // The only other row at this position is the panel under that row.
+    return DetailGridRow<T>(
+      index: index,
+      data: data,
+      rowKey: keyOf(raw),
+      height: height,
     );
   }
 

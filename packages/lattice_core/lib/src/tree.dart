@@ -15,10 +15,17 @@ import 'rows.dart';
 /// Give exactly one of [childrenOf] and [parentOf]: a nested model knows its
 /// children, a flat one knows its parent.
 class TreeSpec<T> {
-  const TreeSpec({this.childrenOf, this.parentOf})
-      : assert(
-          (childrenOf == null) != (parentOf == null),
-          'Give exactly one of childrenOf and parentOf',
+  const TreeSpec({
+    this.childrenOf,
+    this.parentOf,
+    this.childrenLoader,
+    this.hasChildren,
+  }) : assert(
+          (childrenOf == null ? 0 : 1) +
+                  (parentOf == null ? 0 : 1) +
+                  (childrenLoader == null ? 0 : 1) ==
+              1,
+          'Give exactly one of childrenOf, parentOf and childrenLoader',
         );
 
   /// A row's children, for a model that nests them.
@@ -34,7 +41,26 @@ class TreeSpec<T> {
   /// their reports visible instead of dropping them off the grid.
   final Object? Function(T row)? parentOf;
 
+  /// Fetches a row's children when its branch is first opened.
+  ///
+  /// For data that is a tree on a server: a file listing, an org chart one
+  /// level at a time. The grid asks once per row, keeps what comes back, and
+  /// marks the branch as loading in between so an open branch does not look
+  /// like an empty one.
+  final Future<List<T>> Function(T row)? childrenLoader;
+
+  /// Whether a row has children, where that is known before they arrive.
+  ///
+  /// A lazily loaded tree has to draw a disclosure control before it knows
+  /// what is underneath, and the answer usually travels with the row - a
+  /// folder flag, a child count. Without it a row is drawn as a leaf until it
+  /// is opened, which is the one thing a user cannot do to it.
+  final bool Function(T row)? hasChildren;
+
   bool get isNested => childrenOf != null;
+
+  /// Whether children arrive asynchronously.
+  bool get isLazy => childrenLoader != null;
 }
 
 /// Flattens [rows] into the visible rows of a tree, skipping what is closed.
@@ -53,6 +79,8 @@ List<GridRow<T>> flattenTree<T>({
   required TreeSpec<T> spec,
   required Object Function(T row) keyOf,
   required GroupExpansionState expansion,
+  Map<Object, List<T>> loadedChildren = const {},
+  Set<Object> loadingKeys = const {},
 }) {
   final out = <GridRow<T>>[];
   final seen = <Object>{};
@@ -77,7 +105,18 @@ List<GridRow<T>> flattenTree<T>({
 
   List<T> children(T row) {
     if (childrenOf != null) return childrenOf(row);
+    if (spec.isLazy) return loadedChildren[keyOf(row)] ?? const [];
     return byParent[keyOf(row)] ?? const [];
+  }
+
+  /// Whether a disclosure control belongs on this row.
+  ///
+  /// A lazily loaded row may have children nobody has asked for yet, so the
+  /// spec is asked first and the loaded children are only a fallback.
+  bool mayHaveChildren(T row, List<T> loaded) {
+    final declared = spec.hasChildren?.call(row);
+    if (declared != null) return declared;
+    return loaded.isNotEmpty;
   }
 
   void walk(List<T> level, int depth, String parentPath) {
@@ -94,8 +133,9 @@ List<GridRow<T>> flattenTree<T>({
         depth: depth,
         tree: TreeRowInfo(
           path: path,
-          hasChildren: kids.isNotEmpty,
+          hasChildren: mayHaveChildren(row, kids),
           expanded: expanded,
+          loading: loadingKeys.contains(key),
         ),
       ));
       if (kids.isEmpty || !expanded) continue;

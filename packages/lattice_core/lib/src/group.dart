@@ -13,6 +13,7 @@ class GroupSpec {
     this.direction = SortDirection.ascending,
     this.keyOf,
     this.labelOf,
+    this.blankLabel = '(blank)',
   });
 
   final String field;
@@ -27,10 +28,19 @@ class GroupSpec {
   /// Renders a group key as a header label.
   final String Function(Object? key)? labelOf;
 
+  /// Label for the group of rows whose value is null.
+  ///
+  /// The engine owns exactly one piece of user-visible text, and this is it.
+  /// It is a field rather than a lookup because `lattice_core` must not grow
+  /// a dependency on anyone's localisations: an app that needs it translated
+  /// passes the translated string, from wherever its other strings come
+  /// from. [labelOf], where given, overrides this as it does everything else.
+  final String blankLabel;
+
   Object? keyFor(Object? value) => keyOf != null ? keyOf!(value) : value;
 
   String labelFor(Object? key) =>
-      labelOf != null ? labelOf!(key) : (key == null ? '(blank)' : '$key');
+      labelOf != null ? labelOf!(key) : (key == null ? blankLabel : '$key');
 
   /// A stable string identifying which buckets this spec produces, for use as
   /// a cache key.
@@ -41,7 +51,7 @@ class GroupSpec {
   /// written at the same place with the same captured values are `==` in
   /// Dart, so a spec rebuilt on every frame still hits the cache.
   String get fingerprint => '$field:${direction.name}'
-      ':${keyOf?.hashCode ?? 0}:${labelOf?.hashCode ?? 0}';
+      ':${keyOf?.hashCode ?? 0}:${labelOf?.hashCode ?? 0}:$blankLabel';
 
   /// JSON for a saved view.
   ///
@@ -62,12 +72,14 @@ class GroupSpec {
   GroupSpec restore({
     Object? Function(Object? value)? keyOf,
     String Function(Object? key)? labelOf,
+    String? blankLabel,
   }) {
     return GroupSpec(
       field,
       direction: direction,
       keyOf: keyOf ?? this.keyOf,
       labelOf: labelOf ?? this.labelOf,
+      blankLabel: blankLabel ?? this.blankLabel,
     );
   }
 
@@ -77,10 +89,11 @@ class GroupSpec {
       other.field == field &&
       other.direction == direction &&
       other.keyOf == keyOf &&
-      other.labelOf == labelOf;
+      other.labelOf == labelOf &&
+      other.blankLabel == blankLabel;
 
   @override
-  int get hashCode => Object.hash(field, direction, keyOf, labelOf);
+  int get hashCode => Object.hash(field, direction, keyOf, labelOf, blankLabel);
 
   @override
   String toString() => 'group by $field';

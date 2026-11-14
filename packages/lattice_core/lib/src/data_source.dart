@@ -31,6 +31,7 @@ class SourceCapabilities {
     required this.providesDistinctValues,
     required this.supportsLazyGroups,
     required this.supportsCancellation,
+    this.supportsLoadMore = true,
   });
 
   /// Rows are resolved locally, so the grid need not re-query to sort, filter
@@ -57,6 +58,9 @@ class SourceCapabilities {
   /// An in-flight fetch is actually abandoned when the grid cancels it.
   final bool supportsCancellation;
 
+  /// The source can be asked for another slice, for infinite scrolling.
+  final bool supportsLoadMore;
+
   @override
   String toString() => 'SourceCapabilities(${[
         if (isLocal) 'local',
@@ -66,6 +70,7 @@ class SourceCapabilities {
         if (providesDistinctValues) 'distinct',
         if (supportsLazyGroups) 'lazyGroups',
         if (supportsCancellation) 'cancellation',
+        if (supportsLoadMore) 'loadMore',
       ].join(', ')})';
 }
 
@@ -213,12 +218,28 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
   /// Whether [distinctValuesFor] answers with real values.
   bool get providesDistinctValues => false;
 
+  /// Whether rows exist beyond the last result, for a grid that loads more as
+  /// the user scrolls rather than paging.
+  ///
+  /// A source that cannot know - a REST endpoint that reports no total -
+  /// should return true until a fetch comes back short, which is what the
+  /// grid's own book-keeping does for [InMemoryDataSource].
+  bool get hasMore => false;
+
   /// Whether this source honours [GridQuery.signal] by abandoning the work.
   ///
   /// False by default, because ignoring the signal is a valid implementation
   /// and claiming otherwise would have an adapter promise the user something
   /// that does not happen.
   bool get supportsCancellation => false;
+
+  /// Whether this source can extend itself a slice at a time.
+  ///
+  /// Distinct from [hasMore], which is about whether there is anything left:
+  /// this is about whether asking is meaningful at all. A source answers a
+  /// load-more request through [fetch] with an offset, so the default is to
+  /// support it as soon as rows are paged.
+  bool get supportsLoadMore => true;
 
   /// Everything this source can do, in one value.
   SourceCapabilities get capabilities => SourceCapabilities(
@@ -229,6 +250,7 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
         providesDistinctValues: providesDistinctValues,
         supportsLazyGroups: supportsLazyGroups,
         supportsCancellation: supportsCancellation,
+        supportsLoadMore: supportsLoadMore,
       );
 
   /// Range of the values currently shown in [field], for conditional

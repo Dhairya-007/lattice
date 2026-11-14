@@ -18,7 +18,13 @@ export 'lattice_core.dart';
 export 'src/aggregate.dart' show computeAggregates;
 export 'src/decoration.dart' show computeColumnStats;
 export 'src/group.dart' show buildGroups;
-export 'src/rows.dart' show LazyDataRowList, collectGroupPaths, flattenGroups;
+export 'src/rows.dart'
+    show
+        DetailRowList,
+        LazyDataRowList,
+        collectGroupPaths,
+        flattenGroups,
+        withDetailRows;
 export 'src/sort.dart' show buildComparator, sortRows;
 export 'src/stacked_header.dart' show describeHeaderProblems;
 export 'src/tree.dart' show collectTreePaths, flattenTree, rootsOf;

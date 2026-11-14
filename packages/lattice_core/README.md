@@ -65,6 +65,8 @@ for (final row in controller.visibleRows) {
       print(data.name);
     case GroupGridRow<Employee>(:final label, :final rowCount):
       print('$label ($rowCount)');
+    case DetailGridRow<Employee>(:final data):
+      print('details for ${data.name}');
   }
 }
 ```

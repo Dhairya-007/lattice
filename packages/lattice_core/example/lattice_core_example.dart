@@ -114,6 +114,10 @@ void _dump(GridController<Employee> controller) {
         final cells =
             columns.map((c) => c.formattedValue(data).padRight(12)).join();
         print('${'  ' * depth}$cells');
+      case DetailGridRow<Employee>(:final data, :final depth):
+        // An open detail panel. What goes in it is the adapter's business;
+        // a console dump just says it is there.
+        print('${'  ' * (depth + 1)}... details for ${data.name}');
     }
   }
 }
