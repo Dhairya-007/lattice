@@ -805,7 +805,26 @@ class GridController<T> with GridChangeNotifier {
   // -- Conditional formatting -----------------------------------------------
 
   /// Range of the values currently shown in [field].
-  ColumnStats statsFor(String field) => _dataSource.statsFor(field);
+  ///
+  /// A result that carries stats for the column wins: a remote source knows
+  /// the range over the whole filtered set, while the grid only holds the
+  /// page it was sent.
+  ColumnStats statsFor(String field) =>
+      _result?.stats[field] ?? _dataSource.statsFor(field);
+
+  /// The distinct values of [field] among the matching rows, for a checkbox
+  /// filter list. Empty when the source cannot answer.
+  List<Object?> distinctValuesFor(String field, {int limit = 500}) =>
+      _dataSource.distinctValuesFor(field, limit: limit);
+
+  /// The filter operators worth offering for [field], most useful first.
+  ///
+  /// Resolved from the column's [ColumnType], so an adapter builds its menu
+  /// from the engine's model of the column instead of its own switch.
+  List<FilterOperator> operatorsForField(String field) {
+    final column = this.column(field);
+    return column == null ? const [] : operatorsFor(column.type);
+  }
 
   /// How the cell at [field] in [row] should be emphasised.
   ///

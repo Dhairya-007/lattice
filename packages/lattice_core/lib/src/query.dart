@@ -2,6 +2,7 @@
 library;
 
 import 'aggregate.dart';
+import 'decoration.dart';
 import 'fetch.dart';
 import 'filter.dart';
 import 'group.dart';
@@ -107,6 +108,7 @@ class GridResult<T> {
     this.groups = const [],
     this.aggregates = const AggregateResult.empty(),
     this.filteredCount,
+    this.stats = const {},
   });
 
   /// The page of data rows, already ordered. Empty when [groups] is used.
@@ -123,6 +125,15 @@ class GridResult<T> {
 
   /// Grid-wide aggregates for the summary footer.
   final AggregateResult aggregates;
+
+  /// Per-column ranges, keyed by field, for conditional formatting.
+  ///
+  /// A local source computes these itself, so this is how a remote one makes
+  /// data bars and colour scales work at all: without a min and a max there
+  /// is nothing to draw a bar against, and a rule over a server-paged column
+  /// silently did nothing. A source that returns stats for a column overrides
+  /// its own [LatticeDataSource.statsFor] for as long as the result stands.
+  final Map<String, ColumnStats> stats;
 
   int get matchedCount => filteredCount ?? totalCount;
 

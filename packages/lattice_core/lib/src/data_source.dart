@@ -3,6 +3,7 @@ library;
 
 import 'aggregate.dart';
 import 'column.dart';
+import 'compare.dart';
 import 'decoration.dart';
 import 'filter.dart';
 import 'group.dart';
@@ -74,6 +75,16 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
   /// formatting. Sources that cannot answer cheaply return
   /// [ColumnStats.empty], which leaves rules inert rather than wrong.
   ColumnStats statsFor(String field) => ColumnStats.empty;
+
+  /// The distinct values of [field] among the rows that currently match, in
+  /// ascending order, for a checkbox filter list.
+  ///
+  /// Returns an empty list when the source cannot answer cheaply, which an
+  /// adapter reads as "offer a text filter instead" rather than as "this
+  /// column is empty". [limit] caps the list: a value picker over a
+  /// high-cardinality column is unusable anyway, and a source should not
+  /// materialise a million strings to be told so.
+  List<Object?> distinctValuesFor(String field, {int limit = 500}) => const [];
 
   /// Tells the grid to re-run its current query, e.g. after a write.
   void invalidate() => notifyListeners();
@@ -318,6 +329,44 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
         : computeColumnStats(rows.map(column.value));
     _stats[field] = stats;
     return stats;
+  }
+
+  String _distinctKey = '';
+  final Map<String, List<Object?>> _distinct = {};
+
+  /// The distinct values of [field] among the rows that currently match.
+  ///
+  /// Cached exactly as [statsFor] is, and for the same reason: a checkbox
+  /// filter list is rebuilt every time the menu opens, and scanning a column
+  /// per frame is not affordable. Truncated at [limit], in which case the
+  /// list is the first [limit] values in ascending order.
+  @override
+  List<Object?> distinctValuesFor(String field, {int limit = 500}) {
+    final key = '$revision\u0000$_matchedKey\u0000$limit';
+    if (_distinctKey != key) {
+      _distinct.clear();
+      _distinctKey = key;
+    }
+    final cached = _distinct[field];
+    if (cached != null) return cached;
+
+    final column = columns[field];
+    if (column == null) return const [];
+    final rows =
+        _matchedRows.isEmpty && _matchedKey.isEmpty ? _rows : _matchedRows;
+    final seen = <Object?>{};
+    for (final row in rows) {
+      seen.add(column.value(row));
+      // One over the limit, so a caller can tell a truncated list from a
+      // complete one by its length.
+      if (seen.length > limit) break;
+    }
+    final values = seen.toList()..sort(compareValues);
+    final out = List<Object?>.unmodifiable(
+      values.length > limit ? values.sublist(0, limit) : values,
+    );
+    _distinct[field] = out;
+    return out;
   }
 
   // -- The search index -----------------------------------------------------
