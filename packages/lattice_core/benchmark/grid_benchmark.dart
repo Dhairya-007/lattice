@@ -2,13 +2,18 @@
 //
 //   dart run benchmark/grid_benchmark.dart
 //   dart run benchmark/grid_benchmark.dart 10000 50000 200000
+//   dart run benchmark/grid_benchmark.dart --check      # fail on a breach
+//   dart run benchmark/grid_benchmark.dart --markdown   # a table to publish
 //
 // Every figure is the median of several runs, because a single run on a cold
 // JIT measures the compiler rather than the code. Numbers are only comparable
 // against another run on the same machine.
+import 'dart:io' show exitCode;
 import 'dart:math';
 
 import 'package:lattice_core/lattice_core.dart';
+
+import 'budgets.dart';
 
 /// A log line, the shape of data people actually put in a grid this size.
 class LogEntry {
@@ -112,29 +117,61 @@ double measure(void Function() body, {int runs = 7, int warmup = 2}) {
   return samples[samples.length ~/ 2];
 }
 
+/// Exit code when `--check` finds an operation over its ceiling.
+const int _breachExitCode = 1;
+
 void main(List<String> args) {
-  final sizes =
-      args.isEmpty ? const [10000, 50000] : args.map(int.parse).toList();
-
-  print('Lattice engine benchmark');
-  print('median of 7 runs, milliseconds, lower is better\n');
-
-  final header = [
-    'operation'.padRight(40),
-    ...sizes.map((s) => _k(s).padLeft(10))
+  final check = args.contains('--check');
+  final markdown = args.contains('--markdown');
+  final sizeArgs = [
+    for (final a in args)
+      if (!a.startsWith('--')) a
   ];
-  print(header.join());
-  print('-' * (40 + 10 * sizes.length));
+  final sizes = sizeArgs.isEmpty
+      ? const [10000, 50000]
+      : sizeArgs.map(int.parse).toList();
+
+  if (markdown) {
+    print('### Lattice engine benchmark');
+    print('');
+    print('Median of 7 runs, milliseconds, lower is better. '
+        'Ceilings are in `benchmark/budgets.dart`.');
+    print('');
+    print('| operation | ${sizes.map(_k).join(' | ')} |');
+    print('| --- | ${sizes.map((_) => '---:').join(' | ')} |');
+  } else {
+    print('Lattice engine benchmark');
+    print('median of 7 runs, milliseconds, lower is better\n');
+    print([
+      'operation'.padRight(40),
+      ...sizes.map((s) => _k(s).padLeft(10)),
+    ].join());
+    print('-' * (40 + 10 * sizes.length));
+  }
 
   final results = <String, List<double>>{};
 
   void record(String label, double Function(int size) run) {
     final row = [for (final size in sizes) run(size)];
     results[label] = row;
-    print([
-      label.padRight(40),
-      ...row.map((ms) => ms.toStringAsFixed(2).padLeft(10)),
-    ].join());
+    if (markdown) {
+      final ceilings = benchmarkCeilings[label.trim()];
+      final cells = [
+        for (var i = 0; i < sizes.length; i++)
+          () {
+            final ms = row[i].toStringAsFixed(2);
+            final ceiling = ceilings?[sizes[i]];
+            if (ceiling == null) return ms;
+            return row[i] > ceiling ? '**$ms** (over $ceiling)' : ms;
+          }(),
+      ];
+      print('| ${label.trim()} | ${cells.join(' | ')} |');
+    } else {
+      print([
+        label.padRight(40),
+        ...row.map((ms) => ms.toStringAsFixed(2).padLeft(10)),
+      ].join());
+    }
   }
 
   // Built once per size: the benchmark measures operations on an existing
@@ -296,7 +333,8 @@ void main(List<String> args) {
     );
   });
 
-  print('\nInteractive budget is one frame, 16.7 ms. Anything above that is');
+  print('');
+  print('Interactive budget is one frame, 16.7 ms. Anything above that is');
   print('a visible stall when the user types, sorts or pages.');
 
   final slow = <String>[];
@@ -307,13 +345,53 @@ void main(List<String> args) {
     if (entry.value.any((ms) => ms > 16.7)) slow.add(entry.key.trim());
   }
   if (slow.isEmpty) {
-    print('\nEvery operation fits in a frame at every size measured.');
+    print('');
+    print('Every operation fits in a frame at every size measured.');
   } else {
-    print('\nOver budget somewhere: ${slow.join(', ')}');
+    print('');
+    print('Over budget somewhere: ${slow.join(', ')}');
   }
 
   // Keep the sources alive to the end so nothing is collected mid-run.
-  print('\n(rows held: ${sources.values.map((s) => s.length).join(', ')})');
+  print('');
+  print('(rows held: ${sources.values.map((s) => s.length).join(', ')})');
+
+  final breaches = _breaches(results, sizes);
+  if (breaches.isNotEmpty) {
+    print('');
+    print('Over the checked-in ceiling:');
+    for (final breach in breaches) {
+      print('  $breach');
+    }
+    print('');
+    print('Either this is a regression, or the operation now earns its cost '
+        'and benchmark/budgets.dart should say so.');
+  }
+  if (check && breaches.isNotEmpty) exitCode = _breachExitCode;
+}
+
+/// Operations that cost more than [benchmarkCeilings] allows.
+///
+/// A size with no ceiling recorded is not checked rather than treated as
+/// zero: the benchmark takes any row counts on the command line, and a run
+/// at 200k is a measurement, not a failure.
+List<String> _breaches(Map<String, List<double>> results, List<int> sizes) {
+  final out = <String>[];
+  for (final entry in results.entries) {
+    final label = entry.key.trim();
+    final ceilings = benchmarkCeilings[label];
+    if (ceilings == null) continue;
+    for (var i = 0; i < sizes.length; i++) {
+      final ceiling = ceilings[sizes[i]];
+      if (ceiling == null) continue;
+      final ms = entry.value[i];
+      if (ms > ceiling) {
+        out.add('$label at ${_k(sizes[i])}: '
+            '${ms.toStringAsFixed(2)} ms, ceiling $ceiling ms');
+      }
+    }
+  }
+  return out;
 }
 
 String _k(int n) => n >= 1000 ? '${n ~/ 1000}k' : '$n';

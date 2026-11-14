@@ -51,6 +51,8 @@ class GridController<T> with GridChangeNotifier {
     this.lazyGrouping = false,
     this.tree,
     bool treeExpandedByDefault = true,
+    this.loadMoreSize,
+    this.detailHeight,
   })  : _columns = List<GridColumn<T>>.of(columns),
         _dataSource = dataSource,
         _sorts = List<SortSpec>.of(sorts),
@@ -73,6 +75,7 @@ class GridController<T> with GridChangeNotifier {
     );
     _dataSource.columns = columnsByField;
     _dataSource.addListener(_onSourceChanged);
+    if (isInfinite) _loadedCount = loadMoreSize!;
     refresh();
   }
 
@@ -135,6 +138,61 @@ class GridController<T> with GridChangeNotifier {
   /// A few hundred milliseconds turns a typed word into one request.
   Duration? fetchDebounce;
 
+  /// Height of the panel [toggleDetail] opens under a row, or null when the
+  /// grid has no detail panels.
+  ///
+  /// A fixed height rather than a measured one, because row offsets are a
+  /// prefix-sum table and a table cannot wait for a layout pass. An
+  /// application that needs per-row heights can vary them through the
+  /// adapter's own row-height builder, keyed off [DetailGridRow].
+  final double? detailHeight;
+
+  /// Which rows have their detail panel open, keyed by [rowKey].
+  final Set<Object> _openDetails = <Object>{};
+
+  /// Whether detail panels are available at all: a height was given and rows
+  /// can be recognised.
+  bool get hasDetailPanels => detailHeight != null && rowKey != null;
+
+  /// Whether the panel under the row with this identity is open.
+  bool isDetailOpen(Object key) => _openDetails.contains(key);
+
+  /// Identities of the rows whose panels are open, for a saved view.
+  Set<Object> get openDetails => Set.unmodifiable(_openDetails);
+
+  /// Opens or closes the panel under [key], which is a [rowKey] value.
+  ///
+  /// Keyed by identity rather than by index for the reason the selection is:
+  /// a panel the user opened belongs to a row, and a sort must not move it
+  /// onto a different one.
+  void toggleDetail(Object key) {
+    if (!_openDetails.remove(key)) _openDetails.add(key);
+    _reapply();
+  }
+
+  void setDetailOpen(Object key, bool open) {
+    final changed = open ? _openDetails.add(key) : _openDetails.remove(key);
+    if (changed) _reapply();
+  }
+
+  void closeAllDetails() {
+    if (_openDetails.isEmpty) return;
+    _openDetails.clear();
+    _reapply();
+  }
+
+  /// How many rows a [loadMore] asks for, or null to page instead.
+  ///
+  /// Setting it turns the grid into an infinite list: the first fetch asks
+  /// for this many rows and each [loadMore] appends another slice, rather
+  /// than one page replacing the last. Paging and loading more are the same
+  /// request with different book-keeping, so a grid does one or the other -
+  /// [pageSize] is ignored while this is set.
+  final int? loadMoreSize;
+
+  /// Whether the grid is accumulating slices rather than paging.
+  bool get isInfinite => loadMoreSize != null && loadMoreSize! > 0;
+
   /// Whether grouping may be resolved one group at a time by the source.
   ///
   /// Grouping otherwise needs every matching row, because the grid counts the
@@ -196,6 +254,12 @@ class GridController<T> with GridChangeNotifier {
       _columns.where((c) => c.field == field).firstOrNull;
 
   LatticeDataSource<T> get dataSource => _dataSource;
+
+  /// What the current source can do, as it declares it.
+  ///
+  /// An adapter reads this to stop offering what cannot be honoured, rather
+  /// than inferring it from the source's type.
+  SourceCapabilities get sourceCapabilities => _dataSource.capabilities;
 
   List<SortSpec> get sorts => List.unmodifiable(_sorts);
   List<GroupSpec> get groups => List.unmodifiable(_groups);
@@ -291,8 +355,17 @@ class GridController<T> with GridChangeNotifier {
       ],
       groups: _groups,
       aggregations: _aggregations,
-      offset: size == null || size <= 0 || isGrouped ? 0 : _pageIndex * size,
-      limit: isGrouped ? null : (size != null && size > 0 ? size : null),
+      // Infinite mode always asks from the top for everything loaded so far,
+      // so a re-sort or a new filter rebuilds the accumulated list rather
+      // than leaving slices that were ordered under the old query.
+      offset: isInfinite || size == null || size <= 0 || isGrouped
+          ? 0
+          : _pageIndex * size,
+      limit: isGrouped
+          ? null
+          : (isInfinite
+              ? _loadedCount
+              : (size != null && size > 0 ? size : null)),
       lazyGroups: isLazilyGrouped,
     );
   }
@@ -322,7 +395,7 @@ class GridController<T> with GridChangeNotifier {
       final completer = _debounced ??= Completer<void>();
       _loading = true;
       _error = null;
-      notifyListeners();
+      notifyListeners(changes: const {GridChange.status});
       _debounceTimer = Timer(delay, () {
         _debounceTimer = null;
         _debounced = null;
@@ -344,6 +417,70 @@ class GridController<T> with GridChangeNotifier {
   /// Whether a debounced refresh is waiting to be sent.
   bool get isFetchPending => _debounceTimer != null;
 
+  // -- Loading more ---------------------------------------------------------
+
+  /// How many rows the current query asks for in infinite mode: one slice to
+  /// begin with, and one more per [loadMore].
+  int _loadedCount = 0;
+  bool _loadingMore = false;
+
+  /// Whether a [loadMore] is in flight, for a spinner at the tail.
+  bool get isLoadingMore => _loadingMore;
+
+  /// Whether asking for more rows would do anything.
+  ///
+  /// False while one request is already out, so a scroll that reaches the end
+  /// twice in two frames asks once.
+  bool get canLoadMore {
+    if (!isInfinite || isGrouped || _loadingMore) return false;
+    final capabilities = _dataSource.capabilities;
+    if (!capabilities.supportsLoadMore) return false;
+    // A local source knows its own total; a remote one answers for itself.
+    if (capabilities.isLocal) return _loadedCount < matchedCount;
+    return _dataSource.hasMore || _loadedCount < matchedCount;
+  }
+
+  /// Appends another slice of rows.
+  ///
+  /// Returns when the rows are on screen, or immediately if there is nothing
+  /// to ask for. The adapter calls this when the viewport reaches the end;
+  /// the engine owns how much to ask for and when asking is pointless.
+  Future<void> loadMore() async {
+    if (!canLoadMore) return;
+    _loadingMore = true;
+    _loadedCount += loadMoreSize!;
+    notifyListeners(changes: const {GridChange.status});
+    try {
+      await _fetch();
+    } finally {
+      _loadingMore = false;
+      if (!isDisposed) {
+        notifyListeners(changes: const {GridChange.status});
+      }
+    }
+  }
+
+  /// Forgets the current position in the data: the page, and any slices
+  /// accumulated by [loadMore].
+  ///
+  /// Called by everything that changes which rows match or in what order,
+  /// because a slice fetched under the old query describes rows that are no
+  /// longer in those positions.
+  void _resetPaging() {
+    _pageIndex = 0;
+    if (isInfinite) _loadedCount = loadMoreSize!;
+  }
+
+  /// Drops back to the first slice, as a pull-to-refresh does.
+  ///
+  /// The gesture belongs to the adapter; what it means - forget what was
+  /// accumulated and ask again - belongs here.
+  Future<void> reload() {
+    if (isInfinite) _loadedCount = loadMoreSize!;
+    _dataSource.bumpRevision();
+    return refresh();
+  }
+
   void _cancelFetch(String reason) {
     _signal?.cancel(reason);
     _signal = null;
@@ -354,9 +491,10 @@ class GridController<T> with GridChangeNotifier {
     final source = _dataSource;
     _cancelFetch('superseded by a newer query');
 
-    // A local source answers synchronously; resolving it inline avoids a
-    // frame of empty grid on the very first build.
-    if (source is InMemoryDataSource<T>) {
+    // A source that can answer now does; resolving it inline avoids a frame
+    // of empty grid on the very first build. The capability is declared, not
+    // inferred from the type - see [LatticeDataSource.isSynchronous].
+    if (source.isSynchronous) {
       _loading = false;
       _error = null;
       _apply(source.fetchSync(query));
@@ -367,7 +505,7 @@ class GridController<T> with GridChangeNotifier {
     _signal = signal;
     _loading = true;
     _error = null;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.status});
     try {
       final result = await source.fetch(query.copyWith(signal: signal));
       if (token != _fetchToken || isDisposed) return;
@@ -386,7 +524,7 @@ class GridController<T> with GridChangeNotifier {
       _loading = false;
       _error = error;
       if (!keepRowsOnError) _visibleRows = const [];
-      notifyListeners();
+      notifyListeners(changes: const {GridChange.rows, GridChange.status});
     }
   }
 
@@ -396,27 +534,7 @@ class GridController<T> with GridChangeNotifier {
     final tracked = _trackedRowKeys();
 
     _result = result;
-    final hierarchy = tree;
-    _visibleRows = result.isGrouped
-        ? flattenGroups<T>(
-            _mergeLoadedGroups(result.groups),
-            expansion,
-            loadingPaths: _loadingGroups,
-          )
-        : hierarchy != null
-            ? flattenTree<T>(
-                rows: result.rows,
-                spec: hierarchy,
-                keyOf: rowKey!,
-                expansion: treeExpansion,
-              )
-            // Lazy: an ungrouped 50k-row grid must not allocate 50k wrappers
-            // on every change. See [LazyDataRowList].
-            : LazyDataRowList<T>(
-                result.rows,
-                offset: query.offset,
-                substitute: _pendingWrites.isEmpty ? null : _substituteWrite,
-              );
+    _visibleRows = _rowsFor(result);
 
     if (tracked != null) {
       final positions = _rowPositions();
@@ -443,8 +561,13 @@ class GridController<T> with GridChangeNotifier {
       }
     }
     selection.clampTo(_visibleRows.length);
-    notifyListeners();
+    notifyListeners(changes: const {
+      GridChange.rows,
+      GridChange.selection,
+      GridChange.status,
+    });
     if (isLazilyGrouped) _requestOpenGroups();
+    if (isLazyTree) _requestOpenBranches();
   }
 
   // -- Lazy grouping --------------------------------------------------------
@@ -552,6 +675,74 @@ class GridController<T> with GridChangeNotifier {
     _rebuildRows();
   }
 
+  /// Turns a result into the flat list of rows to render.
+  List<GridRow<T>> _rowsFor(GridResult<T> result) {
+    final hierarchy = tree;
+    final details = detailHeight;
+    final key = rowKey;
+    final hasDetails =
+        details != null && key != null && _openDetails.isNotEmpty;
+
+    if (result.isGrouped) {
+      final rows = flattenGroups<T>(
+        _mergeLoadedGroups(result.groups),
+        expansion,
+        loadingPaths: _loadingGroups,
+      );
+      return hasDetails
+          ? withDetailRows<T>(
+              rows,
+              open: _openDetails,
+              height: details,
+              keyOf: key,
+            )
+          : rows;
+    }
+
+    if (hierarchy != null) {
+      final rows = flattenTree<T>(
+        rows: result.rows,
+        spec: hierarchy,
+        keyOf: rowKey!,
+        expansion: treeExpansion,
+        loadedChildren: _loadedChildren,
+        loadingKeys: _loadingChildren,
+      );
+      return hasDetails
+          ? withDetailRows<T>(
+              rows,
+              open: _openDetails,
+              height: details,
+              keyOf: key,
+            )
+          : rows;
+    }
+
+    final substitute = _pendingWrites.isEmpty ? null : _substituteWrite;
+    if (!hasDetails) {
+      // Lazy: an ungrouped 50k-row grid must not allocate 50k wrappers on
+      // every change. See [LazyDataRowList].
+      return LazyDataRowList<T>(
+        result.rows,
+        offset: query.offset,
+        substitute: substitute,
+      );
+    }
+    // Still lazy with panels open: the positions are resolved arithmetically
+    // rather than by building a list. See [DetailRowList].
+    return DetailRowList<T>(
+      result.rows,
+      openAt: [
+        for (var i = 0; i < result.rows.length; i++)
+          if (_openDetails.contains(key(result.rows[i]))) i,
+      ],
+      height: details,
+      keyOf: key,
+      offset: query.offset,
+      substitute: substitute,
+    );
+  }
+
   /// Identities of the rows the selection, the active cell and any open edit
   /// are pointing at, keyed by their current index.
   ///
@@ -609,13 +800,13 @@ class GridController<T> with GridChangeNotifier {
     final column = this.column(field);
     if (column == null || !column.sortable) return;
     _sorts = cycleSort(_sorts, field, additive: additive);
-    _pageIndex = 0;
+    _resetPaging();
     refresh();
   }
 
   void setSorts(List<SortSpec> sorts) {
     _sorts = List<SortSpec>.of(sorts);
-    _pageIndex = 0;
+    _resetPaging();
     refresh();
   }
 
@@ -641,14 +832,14 @@ class GridController<T> with GridChangeNotifier {
     } else {
       _columnFilters[field] = condition;
     }
-    _pageIndex = 0;
+    _resetPaging();
     refresh(coalesce: true);
   }
 
   /// Sets a structured filter that sits alongside the per-column filter row.
   void setFilter(Filter? filter) {
     _filter = filter;
-    _pageIndex = 0;
+    _resetPaging();
     refresh();
   }
 
@@ -657,7 +848,7 @@ class GridController<T> with GridChangeNotifier {
     _filter = null;
     _columnFilters.clear();
     _search = '';
-    _pageIndex = 0;
+    _resetPaging();
     refresh();
   }
 
@@ -665,7 +856,7 @@ class GridController<T> with GridChangeNotifier {
   void setSearch(String text) {
     if (_search == text) return;
     _search = text;
-    _pageIndex = 0;
+    _resetPaging();
     refresh(coalesce: true);
   }
 
@@ -676,13 +867,13 @@ class GridController<T> with GridChangeNotifier {
     final column = this.column(field);
     if (column == null || !column.groupable) return;
     _groups = [..._groups, GroupSpec(field)];
-    _pageIndex = 0;
+    _resetPaging();
     refresh();
   }
 
   void setGroups(List<GroupSpec> groups) {
     _groups = List<GroupSpec>.of(groups);
-    _pageIndex = 0;
+    _resetPaging();
     refresh();
   }
 
@@ -737,6 +928,79 @@ class GridController<T> with GridChangeNotifier {
 
   // -- Tree rows ------------------------------------------------------------
 
+  /// Children fetched for a lazily loaded tree, keyed by [rowKey].
+  final Map<Object, List<T>> _loadedChildren = {};
+  final Set<Object> _loadingChildren = <Object>{};
+  final Map<Object, Object?> _childErrors = {};
+
+  /// Whether this grid's children arrive asynchronously.
+  bool get isLazyTree => isTree && tree!.isLazy;
+
+  /// Whether the grid is waiting for the children of the row with this
+  /// identity.
+  bool isLoadingChildren(Object key) => _loadingChildren.contains(key);
+
+  /// Error from the last attempt to load that row's children, if it failed.
+  Object? childrenError(Object key) => _childErrors[key];
+
+  /// Forgets a row's children so they are fetched again when it is next open.
+  void invalidateChildren(Object key) {
+    _loadedChildren.remove(key);
+    _childErrors.remove(key);
+    _reapply();
+  }
+
+  /// Asks the loader for the children of every open branch that has none.
+  ///
+  /// Driven from the rows on screen, like the lazy group loader, so a branch
+  /// inside a closed one costs nothing until its parent opens.
+  void _requestOpenBranches() {
+    final loader = tree?.childrenLoader;
+    final key = rowKey;
+    if (loader == null || key == null) return;
+    final pending = <T>[];
+    for (final row in _visibleRows) {
+      if (row is! DataGridRow<T>) continue;
+      if (!row.hasChildren || !row.expanded) continue;
+      final identity = key(row.data);
+      if (_loadedChildren.containsKey(identity)) continue;
+      if (_loadingChildren.contains(identity)) continue;
+      if (_childErrors.containsKey(identity)) continue;
+      pending.add(row.data);
+    }
+    if (pending.isEmpty) return;
+    for (final row in pending) {
+      _loadingChildren.add(key(row));
+    }
+    // Re-flatten first, so an open branch says it is loading before the
+    // requests go out. Every key is marked by now, so this cannot ask twice.
+    _reapply();
+    for (final row in pending) {
+      _loadChildren(row, key(row), loader);
+    }
+  }
+
+  Future<void> _loadChildren(
+    T row,
+    Object key,
+    Future<List<T>> Function(T row) loader,
+  ) async {
+    try {
+      final children = await loader(row);
+      if (isDisposed) return;
+      _loadedChildren[key] = children;
+    } on FetchCancelled {
+      return;
+    } catch (error) {
+      if (isDisposed) return;
+      // One branch that would not load is not a failure of the grid.
+      _childErrors[key] = error;
+    } finally {
+      _loadingChildren.remove(key);
+      if (!isDisposed) _reapply();
+    }
+  }
+
   /// Opens or closes one branch, addressed by [DataGridRow.treePath].
   void toggleRow(String path) {
     treeExpansion.toggle(path);
@@ -771,7 +1035,12 @@ class GridController<T> with GridChangeNotifier {
   void setColumns(List<GridColumn<T>> columns) {
     _columns = List<GridColumn<T>>.of(columns);
     _dataSource.columns = columnsByField;
-    refresh();
+    // New columns change the geometry as well as the rows, and the batch
+    // unions the two into one notification rather than two rebuilds.
+    batch(() {
+      notifyListeners(changes: const {GridChange.layout});
+      refresh();
+    });
   }
 
   /// Records an interactive resize, clamped to the column's bounds.
@@ -779,7 +1048,7 @@ class GridController<T> with GridChangeNotifier {
     final column = this.column(field);
     if (column == null || !column.resizable) return;
     _columnWidths[field] = column.clampWidth(width);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout});
   }
 
   /// Widens or narrows [field] to fit its contents, and returns the width it
@@ -823,7 +1092,7 @@ class GridController<T> with GridChangeNotifier {
 
     final fitted = column.clampWidth(widest + padding);
     _columnWidths[field] = fitted;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout});
     return fitted;
   }
 
@@ -852,11 +1121,13 @@ class GridController<T> with GridChangeNotifier {
       _columnWidths[column.field] = column.clampWidth(widest + padding);
       changed = true;
     }
-    if (changed) notifyListeners();
+    if (changed) notifyListeners(changes: const {GridChange.layout});
   }
 
   void resetColumnWidth(String field) {
-    if (_columnWidths.remove(field) != null) notifyListeners();
+    if (_columnWidths.remove(field) != null) {
+      notifyListeners(changes: const {GridChange.layout});
+    }
   }
 
   double widthOf(String field) {
@@ -869,14 +1140,18 @@ class GridController<T> with GridChangeNotifier {
     final index = _columns.indexWhere((c) => c.field == field);
     if (index < 0 || _columns[index].visible == visible) return;
     _columns[index] = _columns[index].copyWith(visible: visible);
-    refresh();
+    batch(() {
+      notifyListeners(changes: const {GridChange.layout});
+      // A hidden column leaves the search fields, so the rows can change too.
+      refresh();
+    });
   }
 
   void setColumnPin(String field, ColumnPin pin) {
     final index = _columns.indexWhere((c) => c.field == field);
     if (index < 0 || _columns[index].pin == pin) return;
     _columns[index] = _columns[index].copyWith(pin: pin);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout});
   }
 
   /// Moves a column to a new position in display order.
@@ -885,7 +1160,7 @@ class GridController<T> with GridChangeNotifier {
     if (from < 0) return;
     final column = _columns.removeAt(from);
     _columns.insert(newIndex.clamp(0, _columns.length), column);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout});
   }
 
   /// Header rows spanning several columns, drawn above the column titles,
@@ -901,7 +1176,7 @@ class GridController<T> with GridChangeNotifier {
       }
       return true;
     }());
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout});
   }
 
   /// Resolves panes and widths for a viewport [width] wide.
@@ -935,23 +1210,23 @@ class GridController<T> with GridChangeNotifier {
   void selectRow(int index,
       [SelectionModifiers modifiers = SelectionModifiers.none]) {
     selection.selectRow(index, modifiers);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   void selectCell(CellAddress cell,
       [SelectionModifiers modifiers = SelectionModifiers.none]) {
     selection.selectCell(cell, visibleFields, modifiers);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   void extendSelectionTo(CellAddress cell) {
     selection.extendTo(cell, visibleFields);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   void selectAllRows() {
     selection.selectAll(_visibleRows.length);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   /// How much of the grid is selected, for a select-all checkbox.
@@ -978,12 +1253,12 @@ class GridController<T> with GridChangeNotifier {
   void setRowSelected(int index, bool selected) {
     if (selection.isRowSelected(index) == selected) return;
     selection.selectRow(index, SelectionModifiers.toggling);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   void clearSelection() {
     selection.clear();
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   /// Moves the active cell by [rowDelta]/[columnDelta], as an arrow key does.
@@ -1120,7 +1395,7 @@ class GridController<T> with GridChangeNotifier {
     final clamped = value < 0 ? 0 : value;
     if (clamped == _frozenRowCount) return;
     _frozenRowCount = clamped;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout, GridChange.rows});
   }
 
   /// Rows pinned to the bottom of the viewport, taken from the end of
@@ -1131,7 +1406,7 @@ class GridController<T> with GridChangeNotifier {
     final clamped = value < 0 ? 0 : value;
     if (clamped == _frozenRowCountBottom) return;
     _frozenRowCountBottom = clamped;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout, GridChange.rows});
   }
 
   /// How many rows are actually frozen at the top, once the row count is
@@ -1228,14 +1503,14 @@ class GridController<T> with GridChangeNotifier {
       row: data,
       initialValue: column.value(data),
     );
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.edit});
     return _edit;
   }
 
   /// Updates the in-flight value, re-running validation.
   void updateEdit(Object? value) {
     _edit?.update(value);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.edit});
   }
 
   /// Validates and writes the edit back through [LatticeDataSource.commit].
@@ -1256,13 +1531,13 @@ class GridController<T> with GridChangeNotifier {
     if (session == null) return const EditResult<Never>.cancelled();
     final result = session.commit();
     if (result.isRejected) {
-      notifyListeners();
+      notifyListeners(changes: const {GridChange.edit});
       return result;
     }
     _edit = null;
     final row = result.row;
     if (row == null) {
-      notifyListeners();
+      notifyListeners(changes: const {GridChange.edit});
       return result;
     }
     if (session.value != session.originalValue) {
@@ -1299,7 +1574,7 @@ class GridController<T> with GridChangeNotifier {
   void clearWriteError() {
     if (_writeError == null) return;
     _writeError = null;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.status});
   }
 
   /// The write in flight, for tests and for a UI that wants to await it.
@@ -1335,7 +1610,7 @@ class GridController<T> with GridChangeNotifier {
       _writeError = UnsupportedError(
         '${source.runtimeType} cannot save edits.',
       );
-      notifyListeners();
+      notifyListeners(changes: const {GridChange.status});
       return;
     }
 
@@ -1348,7 +1623,7 @@ class GridController<T> with GridChangeNotifier {
       } catch (error) {
         if (isDisposed) return;
         _writeError = error;
-        notifyListeners();
+        notifyListeners(changes: const {GridChange.status});
       }
       return;
     }
@@ -1506,7 +1781,7 @@ class GridController<T> with GridChangeNotifier {
 
     _history.record(EditAction<T>(label: 'Paste', changes: changes));
     _pendingWrite = _writeAll(_updatesFor(patches));
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.rows, GridChange.status});
     return PasteResult(
       rowsChanged: patches.length,
       cellsChanged: changes.length,
@@ -1581,7 +1856,7 @@ class GridController<T> with GridChangeNotifier {
     if (patches.isEmpty) return false;
 
     _pendingWrite = _writeAll(_updatesFor(patches));
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.rows, GridChange.status});
     return true;
   }
 
@@ -1603,7 +1878,7 @@ class GridController<T> with GridChangeNotifier {
     if (_edit == null) return;
     _edit!.cancel();
     _edit = null;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.edit});
   }
 
   bool isEditing(CellAddress cell) => _edit?.cell == cell;
@@ -1750,7 +2025,7 @@ class GridController<T> with GridChangeNotifier {
     _dataSource = source;
     _dataSource.columns = columnsByField;
     _dataSource.addListener(_onSourceChanged);
-    _pageIndex = 0;
+    _resetPaging();
     refresh();
   }
 

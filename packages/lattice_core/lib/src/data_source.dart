@@ -11,6 +11,69 @@ import 'notifier.dart';
 import 'query.dart';
 import 'sort.dart';
 
+/// What a data source can do, as the source itself declares it.
+///
+/// The grid used to ask `source is InMemoryDataSource` and treat everything
+/// else as a remote source that could do nothing: no editing, no statistics,
+/// no distinct values, no cancellation. That made "local or remote" a branch
+/// in the engine rather than a property of the source, and every feature
+/// worked fully only on a list in memory.
+///
+/// A source answers for itself instead, and an adapter can read this to stop
+/// offering what the source cannot honour - a checkbox filter list for a
+/// source with no distinct values, an editor for one that cannot write.
+class SourceCapabilities {
+  const SourceCapabilities({
+    required this.isLocal,
+    required this.isSynchronous,
+    required this.canWrite,
+    required this.providesStats,
+    required this.providesDistinctValues,
+    required this.supportsLazyGroups,
+    required this.supportsCancellation,
+    this.supportsLoadMore = true,
+  });
+
+  /// Rows are resolved locally, so the grid need not re-query to sort, filter
+  /// or page.
+  final bool isLocal;
+
+  /// The source can answer inside the frame, through
+  /// [LatticeDataSource.fetchSync].
+  final bool isSynchronous;
+
+  /// Edits can be written back.
+  final bool canWrite;
+
+  /// Column ranges are available, so conditional formatting has something to
+  /// draw against.
+  final bool providesStats;
+
+  /// A column's distinct values are available, for a checkbox filter list.
+  final bool providesDistinctValues;
+
+  /// Group headers and counts can be fetched without their rows.
+  final bool supportsLazyGroups;
+
+  /// An in-flight fetch is actually abandoned when the grid cancels it.
+  final bool supportsCancellation;
+
+  /// The source can be asked for another slice, for infinite scrolling.
+  final bool supportsLoadMore;
+
+  @override
+  String toString() => 'SourceCapabilities(${[
+        if (isLocal) 'local',
+        if (isSynchronous) 'synchronous',
+        if (canWrite) 'write',
+        if (providesStats) 'stats',
+        if (providesDistinctValues) 'distinct',
+        if (supportsLazyGroups) 'lazyGroups',
+        if (supportsCancellation) 'cancellation',
+        if (supportsLoadMore) 'loadMore',
+      ].join(', ')})';
+}
+
 /// What one group holds, fetched when the user opened it.
 class GroupChildren<T> {
   const GroupChildren({
@@ -82,6 +145,29 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
   /// tells the grid to re-query on every sort, filter or page change.
   bool get isLocal => false;
 
+  /// Whether this source can answer inside the current frame, through
+  /// [fetchSync].
+  ///
+  /// The grid takes that path when it can, which is what spares a local grid
+  /// a frame of emptiness on its very first build. It used to ask
+  /// `source is InMemoryDataSource`, which meant that any other synchronous
+  /// source - a decorator, a test double, a SQLite table read on the same
+  /// isolate - was treated as remote however fast it was. A source says what
+  /// it can do; the grid does not guess from its type.
+  bool get isSynchronous => false;
+
+  /// Resolves [query] now, without awaiting.
+  ///
+  /// Only called when [isSynchronous] is true, and throws otherwise: a source
+  /// that cannot answer immediately has nothing to return here, and returning
+  /// an empty result would be a lie the grid would render.
+  GridResult<T> fetchSync(GridQuery query) {
+    throw UnsupportedError(
+      '$runtimeType cannot answer synchronously. Override fetchSync and '
+      'isSynchronous, or leave isSynchronous false and implement fetch.',
+    );
+  }
+
   /// Resolves [query].
   Future<GridResult<T>> fetch(GridQuery query);
 
@@ -120,6 +206,52 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
     }
     return out;
   }
+
+  /// Whether [statsFor] answers with real ranges rather than
+  /// [ColumnStats.empty].
+  ///
+  /// A conditional formatting rule has nothing to draw against without them,
+  /// so an adapter reads this to tell "no rule applies" from "this source
+  /// cannot measure the column".
+  bool get providesStats => false;
+
+  /// Whether [distinctValuesFor] answers with real values.
+  bool get providesDistinctValues => false;
+
+  /// Whether rows exist beyond the last result, for a grid that loads more as
+  /// the user scrolls rather than paging.
+  ///
+  /// A source that cannot know - a REST endpoint that reports no total -
+  /// should return true until a fetch comes back short, which is what the
+  /// grid's own book-keeping does for [InMemoryDataSource].
+  bool get hasMore => false;
+
+  /// Whether this source honours [GridQuery.signal] by abandoning the work.
+  ///
+  /// False by default, because ignoring the signal is a valid implementation
+  /// and claiming otherwise would have an adapter promise the user something
+  /// that does not happen.
+  bool get supportsCancellation => false;
+
+  /// Whether this source can extend itself a slice at a time.
+  ///
+  /// Distinct from [hasMore], which is about whether there is anything left:
+  /// this is about whether asking is meaningful at all. A source answers a
+  /// load-more request through [fetch] with an offset, so the default is to
+  /// support it as soon as rows are paged.
+  bool get supportsLoadMore => true;
+
+  /// Everything this source can do, in one value.
+  SourceCapabilities get capabilities => SourceCapabilities(
+        isLocal: isLocal,
+        isSynchronous: isSynchronous,
+        canWrite: canCommit,
+        providesStats: providesStats,
+        providesDistinctValues: providesDistinctValues,
+        supportsLazyGroups: supportsLazyGroups,
+        supportsCancellation: supportsCancellation,
+        supportsLoadMore: supportsLoadMore,
+      );
 
   /// Range of the values currently shown in [field], for conditional
   /// formatting. Sources that cannot answer cheaply return
@@ -184,6 +316,15 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   @override
   bool get isLocal => true;
+
+  @override
+  bool get isSynchronous => true;
+
+  @override
+  bool get providesStats => true;
+
+  @override
+  bool get providesDistinctValues => true;
 
   /// Replaces every row and refreshes the grid.
   void setRows(Iterable<T> rows) {
@@ -295,6 +436,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   /// grouped - each keyed by the part of the query it depends on and by
   /// [revision]. That is what makes the common interactions cheap: turning a
   /// page only re-slices, and reversing a sort does not re-filter.
+  @override
   GridResult<T> fetchSync(GridQuery query) {
     final total = _rows.length;
     final matched = _matchedFor(query);
@@ -353,9 +495,14 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   List<T> _matchedFor(GridQuery query) {
     final fields = _searchFieldsFor(query);
-    final needle = query.search.trim().toLowerCase();
-    final filterKey =
-        '${query.filter?.fingerprint ?? ''}\u0000${fields.join(',')}';
+    final needle = query.needle;
+    // The query states its own identity; see GridQuery's cache identity
+    // section. Falling back to the resolved search fields matters because
+    // this source substitutes every visible column when the query named
+    // none, and that substitution changes what matches.
+    final filterKey = fields == query.searchFields
+        ? query.filterFingerprint
+        : '${query.filter?.fingerprint ?? ''}\u0000${fields.join(',')}';
     final key = '$filterKey\u0000$needle';
     if (_matchedRevision == revision && _matchedKey == key) {
       return _matchedRows;
@@ -517,7 +664,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   List<T> _orderedFor(GridQuery query, List<T> matched) {
     if (query.sorts.isEmpty) return matched;
     final key = '$_matchedKey\u0000'
-        '${query.sorts.map((s) => '${s.field}:${s.direction.name}:${s.nulls.name}').join(',')}';
+        '${query.sorts.map((s) => s.fingerprint).join(',')}';
     if (_orderedRevision == revision && _orderedKey == key) {
       return _orderedRows;
     }
@@ -537,7 +684,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   AggregateResult _aggregatesFor(GridQuery query, List<T> ordered) {
     if (query.aggregations.isEmpty) return const AggregateResult.empty();
     final key = '$_orderedKey\u0000$_matchedKey\u0000'
-        '${query.aggregations.map((a) => a.id).join(',')}';
+        '${query.aggregations.map((a) => a.fingerprint).join(',')}';
     if (_aggregateRevision == revision && _aggregateKey == key) {
       return _aggregateResult;
     }
@@ -561,7 +708,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
         // The bucketing functions are part of the key: see
         // [GroupSpec.fingerprint].
         '${query.groups.map((g) => g.fingerprint).join(',')}'
-        '\u0000${query.aggregations.map((a) => a.id).join(',')}';
+        '\u0000${query.aggregations.map((a) => a.fingerprint).join(',')}';
     if (_groupRevision == revision && _groupKey == key) return _groupNodes;
     final nodes = buildGroups<T>(
       ordered,

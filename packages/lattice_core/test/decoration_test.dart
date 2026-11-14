@@ -1,4 +1,5 @@
-import 'package:lattice_core/lattice_core.dart';
+// The pipeline stages this exercises are the engine's inner layer.
+import 'package:lattice_core/advanced.dart';
 import 'package:test/test.dart';
 
 import 'fixtures.dart';

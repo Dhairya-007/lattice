@@ -65,6 +65,8 @@ for (final row in controller.visibleRows) {
       print(data.name);
     case GroupGridRow<Employee>(:final label, :final rowCount):
       print('$label ($rowCount)');
+    case DetailGridRow<Employee>(:final data):
+      print('details for ${data.name}');
   }
 }
 ```
@@ -186,6 +188,20 @@ controller.restoreState(
 Functions cannot be serialised, so a grouping with a `keyOf` is restored by
 supplying it again through `restoreState`'s `resolveGroup`.
 
+## Two libraries
+
+```dart
+import 'package:lattice_core/lattice_core.dart';   // what an application holds
+import 'package:lattice_core/advanced.dart';       // the pipeline itself
+```
+
+The everyday library is the controller, the columns, the data sources and the
+specs that describe what to show. `advanced.dart` adds the stages the
+controller drives - `sortRows`, `buildGroups`, `flattenGroups`, `flattenTree`,
+`computeAggregates` - and the implementation types they hand back. Reach for it
+when you are writing a data source that runs part of the pipeline itself, or an
+adapter for another toolkit.
+
 ## Performance notes
 
 - `InMemoryDataSource` runs the whole pipeline eagerly on each query. Around
@@ -195,6 +211,14 @@ supplying it again through `restoreState`'s `resolveGroup`.
   a million variable-height rows is O(log n) per frame rather than O(n).
 - Filtering projects only the fields a filter actually references, so filtering
   a wide table does not build a full map per row.
+- Each stage is memoised against the part of the query it depends on, keyed by
+  that part's own fingerprint: turning a page only re-slices, and reversing a
+  sort does not re-filter.
+- A notification says what changed, so an adapter can repaint a selection
+  without rebuilding the rows. On a large grid that is the difference between
+  a click costing one row and costing all of them.
+- CI measures all of it on every pull request and fails on a regression; see
+  `benchmark/budgets.dart`.
 
 ## Licence
 

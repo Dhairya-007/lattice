@@ -70,6 +70,13 @@ class Aggregation {
   /// Key this aggregate is stored under in [AggregateResult].
   String get id => _id ?? '$field.${type.name}';
 
+  /// A stable string identifying what this aggregate computes, for use as a
+  /// cache key.
+  ///
+  /// The reducer is part of it, because two custom aggregations with the same
+  /// id and different functions do not compute the same thing.
+  String get fingerprint => '$id:${type.name}:$field:${compute?.hashCode ?? 0}';
+
   /// This aggregate's result as display text.
   ///
   /// Without a [format], an integer prints as itself and a fractional result
