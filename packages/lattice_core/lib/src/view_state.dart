@@ -5,6 +5,7 @@ import 'column.dart';
 import 'filter.dart';
 import 'group.dart';
 import 'layout.dart';
+import 'schema.dart';
 import 'sort.dart';
 
 /// One column's arrangement.
@@ -112,7 +113,9 @@ class GridViewState {
   final int frozenRowCountBottom;
   final ColumnFit columnFit;
 
+  /// JSON for storage, stamped with [latticeSchemaVersion].
   Map<String, Object?> toJson() => {
+        latticeSchemaVersionKey: latticeSchemaVersion,
         if (sorts.isNotEmpty) 'sorts': [for (final s in sorts) s.toJson()],
         if (filter != null) 'filter': filter!.toJson(),
         if (columnFilters.isNotEmpty)
@@ -138,6 +141,7 @@ class GridViewState {
   /// view saved by an older version of an app still restores what it can
   /// rather than throwing.
   static GridViewState fromJson(Map<String, Object?> json) {
+    requireSupportedSchema(json, what: 'This saved view');
     final filters = json['columnFilters'];
     return GridViewState(
       sorts: [

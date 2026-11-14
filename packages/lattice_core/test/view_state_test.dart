@@ -152,6 +152,60 @@ void main() {
     });
   });
 
+  group('schema versioning', () {
+    test('a saved view and a query say which format they are in', () {
+      expect(productGrid().saveState().toJson()['v'], latticeSchemaVersion);
+      expect(productGrid().query.toJson()['v'], latticeSchemaVersion);
+    });
+
+    test('a document written before versioning is read as version 1', () {
+      // No 'v' key at all, which is every view saved by 0.2.x.
+      final state = GridViewState.fromJson(const {
+        'search': 'mouse',
+        'columns': [
+          {'field': 'price', 'width': 200.0},
+        ],
+      });
+      expect(state.search, 'mouse');
+      final query = GridQuery.fromJson(const {'search': 'mouse'});
+      expect(query.search, 'mouse');
+    });
+
+    test('a document from a newer build is refused, not misread', () {
+      expect(
+        () => GridViewState.fromJson(const {'v': 99, 'search': 'x'}),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('newer version'), contains('v99')),
+          ),
+        ),
+      );
+      expect(
+        () => GridQuery.fromJson(const {'v': 2}),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('a malformed version is an error rather than a guess', () {
+      expect(
+        () => GridViewState.fromJson(const {'v': 'yesterday'}),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('a version equal to this build is fine', () {
+      expect(
+        requireSupportedSchema(
+          {'v': latticeSchemaVersion},
+          what: 'This thing',
+        ),
+        latticeSchemaVersion,
+      );
+    });
+  });
+
   group('GridQuery.fromJson', () {
     test('round-trips the ordering, filter, search and paging', () {
       final grid = productGrid(pageSize: 2);

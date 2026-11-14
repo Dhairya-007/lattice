@@ -4,6 +4,7 @@ library;
 import 'aggregate.dart';
 import 'decoration.dart';
 import 'fetch.dart';
+import 'schema.dart';
 import 'filter.dart';
 import 'group.dart';
 import 'sort.dart';
@@ -137,7 +138,10 @@ class GridQuery {
     );
   }
 
+  /// JSON for storage or for an HTTP backend, stamped with
+  /// [latticeSchemaVersion].
   Map<String, Object?> toJson() => {
+        latticeSchemaVersionKey: latticeSchemaVersion,
         if (sorts.isNotEmpty) 'sorts': [for (final s in sorts) s.toJson()],
         if (filter != null) 'filter': filter!.toJson(),
         if (hasSearch) 'search': search,
@@ -158,6 +162,7 @@ class GridQuery {
     Map<String, Object?> json, {
     List<Aggregation> aggregations = const [],
   }) {
+    requireSupportedSchema(json, what: 'This query');
     return GridQuery(
       sorts: [
         for (final s in (json['sorts'] as List? ?? const []))

@@ -280,8 +280,8 @@ void main() {
       expect(next.isPaged, isFalse);
     });
 
-    test('serialises only the parts that are set', () {
-      expect(const GridQuery().toJson(), isEmpty);
+    test('serialises only the parts that are set, plus the schema version', () {
+      expect(const GridQuery().toJson(), {'v': 1});
       final json = const GridQuery(
         sorts: [SortSpec('name')],
         search: 'abc',
