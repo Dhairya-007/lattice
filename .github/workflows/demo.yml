@@ -1,0 +1,64 @@
+# Builds the demo for the web, and publishes it when the repository says to.
+#
+# A grid is evaluated by looking at one. A link in the README lets someone
+# decide in thirty seconds, which no amount of prose does.
+#
+# The build runs on every push to main, so a demo that stops compiling is
+# caught here. Publishing is held behind a repository variable because
+# deploying to Pages fails until Pages is enabled for the repository, and a
+# workflow that is red for a reason nobody can fix from a pull request is
+# worse than one that waits: set the variable PUBLISH_DEMO to "true" in
+# Settings -> Secrets and variables -> Actions -> Variables, with Pages set
+# to deploy from GitHub Actions.
+name: Demo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: demo
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build for web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: packages/lattice_flutter/example
+        run: flutter pub get
+
+      # --base-href makes the asset paths work under /lattice/, which is
+      # where a project Pages site lives.
+      - name: Build
+        working-directory: packages/lattice_flutter/example
+        run: flutter build web --release --base-href /lattice/
+
+      - uses: actions/upload-pages-artifact@v3
+        if: vars.PUBLISH_DEMO == 'true'
+        with:
+          path: packages/lattice_flutter/example/build/web
+
+  publish:
+    name: Publish to Pages
+    needs: build
+    if: vars.PUBLISH_DEMO == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

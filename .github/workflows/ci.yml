@@ -56,6 +56,18 @@ jobs:
       - name: Check the package is publishable
         run: dart pub publish --dry-run
 
+      # A grid is judged on speed, so the numbers are published on every run
+      # and a breach of the checked-in ceilings fails the build. The ceilings
+      # sit well above what the code costs, because this runner is shared and
+      # variable and a flaky gate is a gate people learn to ignore. See
+      # benchmark/budgets.dart.
+      - name: Benchmark
+        # GitHub runs steps with pipefail, so a breach still fails the build
+        # through the tee.
+        run: |
+          dart run benchmark/grid_benchmark.dart --markdown --check \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
   flutter:
     name: lattice_flutter (widgets)
     runs-on: ubuntu-latest
