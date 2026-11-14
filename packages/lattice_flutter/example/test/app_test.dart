@@ -52,8 +52,18 @@ void main() {
     await pumpAt(tester, const Size(1440, 900));
     expect(find.text('50.0k'), findsOneWidget);
 
+    final fields = tester.widgetList<TextField>(find.byType(TextField));
+    debugPrint(
+      'DIAG textFields=${fields.length} '
+      'hints=${fields.map((f) => f.decoration?.hintText).toList()}',
+    );
+
     await tester.enterText(find.byType(TextField).first, 'circuit breaker');
     await tester.pump(const Duration(milliseconds: 50));
+    debugPrint(
+      'DIAG after search, texts='
+      '${tester.widgetList<Text>(find.byType(Text)).map((t) => t.data).where((t) => t != null && t.length < 12).take(40).toList()}',
+    );
 
     expect(find.text('50.0k'), findsNothing);
     expect(tester.takeException(), isNull);
@@ -63,6 +73,10 @@ void main() {
     await pumpAt(tester, const Size(1440, 900));
     await tester.tap(find.text('Group'));
     await tester.pump(const Duration(milliseconds: 50));
+    debugPrint(
+      'DIAG after group, texts='
+      '${tester.widgetList<Text>(find.byType(Text)).map((t) => t.data).whereType<String>().take(40).toList()}',
+    );
     expect(find.textContaining('service:'), findsWidgets);
 
     await tester.tap(find.text('Group'));
@@ -107,6 +121,10 @@ void main() {
     await pumpAt(tester, const Size(1440, 900));
     await tester.tap(find.text('Errors'));
     await tester.pump(const Duration(milliseconds: 50));
+    debugPrint(
+      'DIAG after errors, texts='
+      '${tester.widgetList<Text>(find.byType(Text)).map((t) => t.data).whereType<String>().take(24).toList()}',
+    );
     expect(find.text('50.0k'), findsNothing);
 
     await tester.tap(find.text('Reset'));
