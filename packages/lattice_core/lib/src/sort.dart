@@ -31,6 +31,14 @@ class SortSpec {
         nulls: nulls,
       );
 
+  /// A stable string identifying the ordering this spec asks for, for use as
+  /// a cache key.
+  ///
+  /// Every field that changes the result appears in it. A cache key assembled
+  /// by its caller is a key that forgets a field the next time one is added;
+  /// a spec states its own identity instead.
+  String get fingerprint => '$field:${direction.name}:${nulls.name}';
+
   Map<String, Object?> toJson() => {
         'field': field,
         'dir': direction.name,

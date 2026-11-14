@@ -146,10 +146,12 @@ GridLayout<T> computeLayout<T>(
   Map<String, double> widthOverrides = const {},
   ColumnFit fit = ColumnFit.none,
 }) {
-  final visible = [
-    for (final c in columns)
-      if (c.visible) c,
-  ];
+  // Screen order, not list order: this is the only place either is derived,
+  // so the panes, the exported header, keyboard navigation and range
+  // selection cannot disagree about which column is next to which. Growing
+  // "the last column" also means the last one on screen, which is what the
+  // user is looking at.
+  final visible = orderColumnsForDisplay<T>(columns);
 
   double widthOf(GridColumn<T> c) {
     final override = widthOverrides[c.field];

@@ -66,6 +66,45 @@ class GridQuery {
   /// describes one attempt, not what the grid wants to show.
   final FetchSignal? signal;
 
+  /// The search text as matching actually uses it: trimmed and lowercased.
+  ///
+  /// Defined here rather than in each source, so that a source and the cache
+  /// key it stores a result under cannot disagree about what was searched for.
+  String get needle => search.trim().toLowerCase();
+
+  // -- Cache identity -------------------------------------------------------
+  //
+  // Each stage of the pipeline is memoised against the part of the query it
+  // depends on, and these are that part's identity. They are built from each
+  // spec's own `fingerprint` rather than assembled from fields here, because
+  // a key assembled by its caller is a key that forgets a field the next time
+  // one is added - which is exactly how regrouping with a different `keyOf`
+  // came to serve the previous buckets.
+
+  /// Identity of everything that decides which rows match, apart from the
+  /// search text.
+  ///
+  /// Separate from [matchFingerprint] because a source can narrow the previous
+  /// result when only the needle grew, and that shortcut needs to know the
+  /// rest of the filter is unchanged.
+  String get filterFingerprint =>
+      '${filter?.fingerprint ?? ''}\u0000${searchFields.join(',')}';
+
+  /// Identity of which rows match.
+  String get matchFingerprint => '$filterFingerprint\u0000$needle';
+
+  /// Identity of which rows match and in what order.
+  String get orderFingerprint =>
+      '$matchFingerprint\u0000${sorts.map((s) => s.fingerprint).join(',')}';
+
+  /// Identity of the aggregates computed over the matching rows.
+  String get aggregateFingerprint =>
+      '$orderFingerprint\u0000${aggregations.map((a) => a.fingerprint).join(',')}';
+
+  /// Identity of the group tree, aggregates included.
+  String get groupFingerprint =>
+      '$aggregateFingerprint\u0000${groups.map((g) => g.fingerprint).join(',')}';
+
   bool get hasSearch => search.trim().isNotEmpty;
   bool get isGrouped => groups.isNotEmpty;
   bool get isPaged => limit != null;

@@ -197,6 +197,12 @@ class GridController<T> with GridChangeNotifier {
 
   LatticeDataSource<T> get dataSource => _dataSource;
 
+  /// What the current source can do, as it declares it.
+  ///
+  /// An adapter reads this to stop offering what cannot be honoured, rather
+  /// than inferring it from the source's type.
+  SourceCapabilities get sourceCapabilities => _dataSource.capabilities;
+
   List<SortSpec> get sorts => List.unmodifiable(_sorts);
   List<GroupSpec> get groups => List.unmodifiable(_groups);
   List<Aggregation> get aggregations => List.unmodifiable(_aggregations);
@@ -322,7 +328,7 @@ class GridController<T> with GridChangeNotifier {
       final completer = _debounced ??= Completer<void>();
       _loading = true;
       _error = null;
-      notifyListeners();
+      notifyListeners(changes: const {GridChange.status});
       _debounceTimer = Timer(delay, () {
         _debounceTimer = null;
         _debounced = null;
@@ -354,9 +360,10 @@ class GridController<T> with GridChangeNotifier {
     final source = _dataSource;
     _cancelFetch('superseded by a newer query');
 
-    // A local source answers synchronously; resolving it inline avoids a
-    // frame of empty grid on the very first build.
-    if (source is InMemoryDataSource<T>) {
+    // A source that can answer now does; resolving it inline avoids a frame
+    // of empty grid on the very first build. The capability is declared, not
+    // inferred from the type - see [LatticeDataSource.isSynchronous].
+    if (source.isSynchronous) {
       _loading = false;
       _error = null;
       _apply(source.fetchSync(query));
@@ -367,7 +374,7 @@ class GridController<T> with GridChangeNotifier {
     _signal = signal;
     _loading = true;
     _error = null;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.status});
     try {
       final result = await source.fetch(query.copyWith(signal: signal));
       if (token != _fetchToken || isDisposed) return;
@@ -386,7 +393,7 @@ class GridController<T> with GridChangeNotifier {
       _loading = false;
       _error = error;
       if (!keepRowsOnError) _visibleRows = const [];
-      notifyListeners();
+      notifyListeners(changes: const {GridChange.rows, GridChange.status});
     }
   }
 
@@ -443,7 +450,11 @@ class GridController<T> with GridChangeNotifier {
       }
     }
     selection.clampTo(_visibleRows.length);
-    notifyListeners();
+    notifyListeners(changes: const {
+      GridChange.rows,
+      GridChange.selection,
+      GridChange.status,
+    });
     if (isLazilyGrouped) _requestOpenGroups();
   }
 
@@ -771,7 +782,12 @@ class GridController<T> with GridChangeNotifier {
   void setColumns(List<GridColumn<T>> columns) {
     _columns = List<GridColumn<T>>.of(columns);
     _dataSource.columns = columnsByField;
-    refresh();
+    // New columns change the geometry as well as the rows, and the batch
+    // unions the two into one notification rather than two rebuilds.
+    batch(() {
+      notifyListeners(changes: const {GridChange.layout});
+      refresh();
+    });
   }
 
   /// Records an interactive resize, clamped to the column's bounds.
@@ -779,7 +795,7 @@ class GridController<T> with GridChangeNotifier {
     final column = this.column(field);
     if (column == null || !column.resizable) return;
     _columnWidths[field] = column.clampWidth(width);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout});
   }
 
   /// Widens or narrows [field] to fit its contents, and returns the width it
@@ -823,7 +839,7 @@ class GridController<T> with GridChangeNotifier {
 
     final fitted = column.clampWidth(widest + padding);
     _columnWidths[field] = fitted;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout});
     return fitted;
   }
 
@@ -852,11 +868,13 @@ class GridController<T> with GridChangeNotifier {
       _columnWidths[column.field] = column.clampWidth(widest + padding);
       changed = true;
     }
-    if (changed) notifyListeners();
+    if (changed) notifyListeners(changes: const {GridChange.layout});
   }
 
   void resetColumnWidth(String field) {
-    if (_columnWidths.remove(field) != null) notifyListeners();
+    if (_columnWidths.remove(field) != null) {
+      notifyListeners(changes: const {GridChange.layout});
+    }
   }
 
   double widthOf(String field) {
@@ -869,14 +887,18 @@ class GridController<T> with GridChangeNotifier {
     final index = _columns.indexWhere((c) => c.field == field);
     if (index < 0 || _columns[index].visible == visible) return;
     _columns[index] = _columns[index].copyWith(visible: visible);
-    refresh();
+    batch(() {
+      notifyListeners(changes: const {GridChange.layout});
+      // A hidden column leaves the search fields, so the rows can change too.
+      refresh();
+    });
   }
 
   void setColumnPin(String field, ColumnPin pin) {
     final index = _columns.indexWhere((c) => c.field == field);
     if (index < 0 || _columns[index].pin == pin) return;
     _columns[index] = _columns[index].copyWith(pin: pin);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout});
   }
 
   /// Moves a column to a new position in display order.
@@ -885,7 +907,7 @@ class GridController<T> with GridChangeNotifier {
     if (from < 0) return;
     final column = _columns.removeAt(from);
     _columns.insert(newIndex.clamp(0, _columns.length), column);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout});
   }
 
   /// Header rows spanning several columns, drawn above the column titles,
@@ -901,7 +923,7 @@ class GridController<T> with GridChangeNotifier {
       }
       return true;
     }());
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout});
   }
 
   /// Resolves panes and widths for a viewport [width] wide.
@@ -935,23 +957,23 @@ class GridController<T> with GridChangeNotifier {
   void selectRow(int index,
       [SelectionModifiers modifiers = SelectionModifiers.none]) {
     selection.selectRow(index, modifiers);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   void selectCell(CellAddress cell,
       [SelectionModifiers modifiers = SelectionModifiers.none]) {
     selection.selectCell(cell, visibleFields, modifiers);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   void extendSelectionTo(CellAddress cell) {
     selection.extendTo(cell, visibleFields);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   void selectAllRows() {
     selection.selectAll(_visibleRows.length);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   /// How much of the grid is selected, for a select-all checkbox.
@@ -978,12 +1000,12 @@ class GridController<T> with GridChangeNotifier {
   void setRowSelected(int index, bool selected) {
     if (selection.isRowSelected(index) == selected) return;
     selection.selectRow(index, SelectionModifiers.toggling);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   void clearSelection() {
     selection.clear();
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.selection});
   }
 
   /// Moves the active cell by [rowDelta]/[columnDelta], as an arrow key does.
@@ -1120,7 +1142,7 @@ class GridController<T> with GridChangeNotifier {
     final clamped = value < 0 ? 0 : value;
     if (clamped == _frozenRowCount) return;
     _frozenRowCount = clamped;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout, GridChange.rows});
   }
 
   /// Rows pinned to the bottom of the viewport, taken from the end of
@@ -1131,7 +1153,7 @@ class GridController<T> with GridChangeNotifier {
     final clamped = value < 0 ? 0 : value;
     if (clamped == _frozenRowCountBottom) return;
     _frozenRowCountBottom = clamped;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.layout, GridChange.rows});
   }
 
   /// How many rows are actually frozen at the top, once the row count is
@@ -1228,14 +1250,14 @@ class GridController<T> with GridChangeNotifier {
       row: data,
       initialValue: column.value(data),
     );
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.edit});
     return _edit;
   }
 
   /// Updates the in-flight value, re-running validation.
   void updateEdit(Object? value) {
     _edit?.update(value);
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.edit});
   }
 
   /// Validates and writes the edit back through [LatticeDataSource.commit].
@@ -1256,13 +1278,13 @@ class GridController<T> with GridChangeNotifier {
     if (session == null) return const EditResult<Never>.cancelled();
     final result = session.commit();
     if (result.isRejected) {
-      notifyListeners();
+      notifyListeners(changes: const {GridChange.edit});
       return result;
     }
     _edit = null;
     final row = result.row;
     if (row == null) {
-      notifyListeners();
+      notifyListeners(changes: const {GridChange.edit});
       return result;
     }
     if (session.value != session.originalValue) {
@@ -1299,7 +1321,7 @@ class GridController<T> with GridChangeNotifier {
   void clearWriteError() {
     if (_writeError == null) return;
     _writeError = null;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.status});
   }
 
   /// The write in flight, for tests and for a UI that wants to await it.
@@ -1335,7 +1357,7 @@ class GridController<T> with GridChangeNotifier {
       _writeError = UnsupportedError(
         '${source.runtimeType} cannot save edits.',
       );
-      notifyListeners();
+      notifyListeners(changes: const {GridChange.status});
       return;
     }
 
@@ -1348,7 +1370,7 @@ class GridController<T> with GridChangeNotifier {
       } catch (error) {
         if (isDisposed) return;
         _writeError = error;
-        notifyListeners();
+        notifyListeners(changes: const {GridChange.status});
       }
       return;
     }
@@ -1506,7 +1528,7 @@ class GridController<T> with GridChangeNotifier {
 
     _history.record(EditAction<T>(label: 'Paste', changes: changes));
     _pendingWrite = _writeAll(_updatesFor(patches));
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.rows, GridChange.status});
     return PasteResult(
       rowsChanged: patches.length,
       cellsChanged: changes.length,
@@ -1581,7 +1603,7 @@ class GridController<T> with GridChangeNotifier {
     if (patches.isEmpty) return false;
 
     _pendingWrite = _writeAll(_updatesFor(patches));
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.rows, GridChange.status});
     return true;
   }
 
@@ -1603,7 +1625,7 @@ class GridController<T> with GridChangeNotifier {
     if (_edit == null) return;
     _edit!.cancel();
     _edit = null;
-    notifyListeners();
+    notifyListeners(changes: const {GridChange.edit});
   }
 
   bool isEditing(CellAddress cell) => _edit?.cell == cell;
