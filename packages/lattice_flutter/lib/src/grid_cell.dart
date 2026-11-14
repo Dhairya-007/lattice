@@ -1,3 +1,4 @@
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:lattice_core/lattice_core.dart';
 import 'package:material_ui/material_ui.dart';
@@ -122,55 +123,85 @@ class LatticeCell<T> extends StatelessWidget {
     final tint = isEditing ? null : theme.backgroundFor(decoration);
     final bar = isEditing ? null : decoration.bar;
 
-    return SizedBox(
-      width: width,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: isSelected && !isEditing ? theme.selectedCellBackground : tint,
-          border: Border(
-            right: theme.showVerticalGridLines && !isLastInPane
-                ? BorderSide(color: theme.gridLine, width: theme.gridLineWidth)
-                : BorderSide.none,
+    // What a screen reader says for this cell. Without the column title a
+    // value is meaningless out of context, and without the row number the
+    // listener cannot tell which record they are on.
+    final semanticLabel =
+        'Row ${address.row + 1}, ${column.title}'
+        '${isSelected ? ', selected' : ''}';
+
+    return Semantics(
+      label: semanticLabel,
+      value: text,
+      selected: isSelected,
+      focused: isActive,
+      textField: isEditing,
+      readOnly: !column.editable,
+      // Traversal follows the columns rather than the widget tree, which
+      // frozen panes would otherwise scramble.
+      sortKey: OrdinalSortKey(address.row * 1000 + width),
+      child: SizedBox(
+        width: width,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: isSelected && !isEditing
+                ? theme.selectedCellBackground
+                : tint,
+            border: Border(
+              right: theme.showVerticalGridLines && !isLastInPane
+                  ? BorderSide(
+                      color: theme.gridLine,
+                      width: theme.gridLineWidth,
+                    )
+                  : BorderSide.none,
+            ),
           ),
-        ),
-        child: Container(
-          foregroundDecoration: isActive && !isEditing
-              ? BoxDecoration(
-                  border: Border.all(color: theme.focusedCellBorder, width: 2),
-                )
-              : null,
-          padding: theme.cellPadding,
-          alignment: _alignmentFor(column.effectiveAlign),
-          // The bar sits behind the text rather than beside it, so adding
-          // one never costs the value any room.
-          child: bar == null
-              ? content
-              : Stack(
-                  fit: StackFit.passthrough,
-                  children: [
-                    Positioned.fill(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: FractionallySizedBox(
-                          widthFactor: bar,
-                          heightFactor: 0.62,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: theme
-                                  .toneColor(decoration.tone)
-                                  .withValues(alpha: theme.dataBarOpacity),
-                              borderRadius: BorderRadius.circular(2),
+          child: Container(
+            foregroundDecoration: isActive && !isEditing
+                ? BoxDecoration(
+                    border: Border.all(
+                      color: theme.focusedCellBorder,
+                      width: 2,
+                    ),
+                  )
+                : null,
+            padding: theme.cellPadding,
+            alignment: _alignmentFor(column.effectiveAlign),
+            // The bar sits behind the text rather than beside it, so adding
+            // one never costs the value any room.
+            // The bar is decoration for the value beside it; announcing it
+            // would just be noise.
+            child: bar == null
+                ? content
+                : Stack(
+                    fit: StackFit.passthrough,
+                    children: [
+                      Positioned.fill(
+                        child: ExcludeSemantics(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: FractionallySizedBox(
+                              widthFactor: bar,
+                              heightFactor: 0.62,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: theme
+                                      .toneColor(decoration.tone)
+                                      .withValues(alpha: theme.dataBarOpacity),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                    Align(
-                      alignment: _alignmentFor(column.effectiveAlign),
-                      child: content,
-                    ),
-                  ],
-                ),
+                      Align(
+                        alignment: _alignmentFor(column.effectiveAlign),
+                        child: content,
+                      ),
+                    ],
+                  ),
+          ),
         ),
       ),
     );
@@ -251,49 +282,65 @@ class _CellEditorState<T> extends State<_CellEditor<T>> {
     final theme = widget.theme;
     return Focus(
       onKeyEvent: _onKey,
-      child: Tooltip(
-        message: error ?? '',
-        // An empty message renders nothing, so a valid edit shows no tooltip.
-        child: TextField(
-          controller: _text,
-          focusNode: _focus,
-          style: theme.cellTextStyle,
-          textAlign: LatticeCell._textAlignFor(widget.column.effectiveAlign),
-          keyboardType: widget.column.type == ColumnType.number
-              ? const TextInputType.numberWithOptions(
-                  decimal: true,
-                  signed: true,
-                )
-              : TextInputType.text,
-          decoration: InputDecoration(
-            isDense: true,
-            filled: true,
-            fillColor: Theme.of(context).colorScheme.surface,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 6,
-              vertical: 8,
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(
-                color: error == null
-                    ? theme.focusedCellBorder
-                    : theme.errorColor,
-                width: 2,
+      // Merged, so the field is one node: the TextField makes a node of its
+      // own, and without the merge it is that node a screen reader reaches,
+      // not the label, value and live region set here.
+      child: MergeSemantics(
+        child: Semantics(
+          label: '${widget.column.title} editor',
+          textField: true,
+          // A live region is announced when its value changes, which covers
+          // the error appearing without reaching for SemanticsService - whose
+          // announce is deprecated for being single-window.
+          liveRegion: error != null,
+          value: error ?? _text.text,
+          child: Tooltip(
+            message: error ?? '',
+            // An empty message renders nothing, so a valid edit shows no tooltip.
+            child: TextField(
+              controller: _text,
+              focusNode: _focus,
+              style: theme.cellTextStyle,
+              textAlign: LatticeCell._textAlignFor(
+                widget.column.effectiveAlign,
               ),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderSide: BorderSide(
-                color: error == null
-                    ? theme.focusedCellBorder
-                    : theme.errorColor,
-                width: 2,
+              keyboardType: widget.column.type == ColumnType.number
+                  ? const TextInputType.numberWithOptions(
+                      decimal: true,
+                      signed: true,
+                    )
+                  : TextInputType.text,
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: Theme.of(context).colorScheme.surface,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 8,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(
+                    color: error == null
+                        ? theme.focusedCellBorder
+                        : theme.errorColor,
+                    width: 2,
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(
+                    color: error == null
+                        ? theme.focusedCellBorder
+                        : theme.errorColor,
+                    width: 2,
+                  ),
+                ),
               ),
+              onChanged: (text) => widget.controller.updateEdit(
+                coerceValue(text, widget.column.type),
+              ),
+              onSubmitted: (_) => _commit(),
             ),
           ),
-          onChanged: (text) => widget.controller.updateEdit(
-            coerceValue(text, widget.column.type),
-          ),
-          onSubmitted: (_) => _commit(),
         ),
       ),
     );
