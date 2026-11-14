@@ -284,6 +284,33 @@ void main() {
     });
   });
 
+  group('export matches the screen', () {
+    test('columns are written in screen order, pinning included', () {
+      final grid = productGrid();
+      grid.setColumnPin('price', ColumnPin.start);
+      final header = grid.exportCsv().split('\r\n').first;
+      expect(header, 'Price,Name,Category,Stock,Active');
+    });
+
+    test('an explicit field list still wins over screen order', () {
+      final grid = productGrid();
+      grid.setColumnPin('price', ColumnPin.start);
+      final header = grid
+          .exportCsv(options: const ExportOptions(fields: ['name', 'price']))
+          .split('\r\n')
+          .first;
+      expect(header, 'Name,Price');
+    });
+
+    test('a copied range covers the columns that are next to each other', () {
+      final grid = productGrid(selectionMode: SelectionMode.cellRange);
+      grid.setColumnPin('stock', ColumnPin.start);
+      grid.selectCell(const CellAddress(0, 'stock'));
+      grid.extendSelectionTo(const CellAddress(0, 'name'));
+      expect(grid.copySelectionAsText(), '12\tKeyboard');
+    });
+  });
+
   test('toClipboardText joins cells with tabs and rows with newlines', () {
     expect(
       toClipboardText<Product>([

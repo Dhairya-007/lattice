@@ -63,16 +63,18 @@ LatticeDataGrid<Employee>(
 | --- | --- |
 | **Sorting** | multi-column, stable, custom comparators, explicit null placement |
 | **Filtering** | 16 operators, a serialisable condition tree, free-text search, a filter row |
-| **Grouping** | nested levels, derived keys, per-group aggregates, collapsible headers |
+| **Grouping** | nested levels, derived keys, per-group aggregates, collapsible headers, server-side |
+| **Tree data** | parent/child rows, from a nested model or a parent reference |
 | **Aggregates** | sum, average, min, max, count, distinct count, custom reducers |
 | **Frozen columns and rows** | leading and trailing panes, plus rows pinned to the top and bottom |
 | **Stacked headers** | header rows spanning several columns, following reorders and hidden columns |
 | **Column menu** | sort, pin, hide, reset width, drag to reorder, and a chooser to bring columns back |
 | **Virtualization** | uniform and variable row heights, plus column windowing for wide grids |
 | **Selection** | rows, cells, rectangular ranges, a tri-state checkbox column, keyboard navigation, TSV copy |
-| **Editing** | validated sessions, inline errors, commit or roll back |
+| **Editing** | validated sessions, inline errors, optimistic writes, paste into a range, undo/redo |
 | **Paging** | local or server-driven, with a summary footer |
 | **Export** | RFC 4180 CSV, grouped CSV, clipboard text |
+| **Saved views** | the whole arrangement - query, column order, widths, pins - as JSON |
 | **Conditional formatting** | data bars, colour scales, thresholds and value tones, decided in the engine |
 | **Sticky group headers** | the group you are inside stays named at the top while you scroll |
 | **Change flash** | a cell lights up when its value changes, for live feeds |

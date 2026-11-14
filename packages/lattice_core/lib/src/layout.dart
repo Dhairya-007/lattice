@@ -107,6 +107,35 @@ class GridLayout<T> {
       columns.isEmpty ? 0 : columns.last.end;
 }
 
+/// Orders [columns] the way they appear on screen: the columns pinned to the
+/// leading edge, then the scrolling ones, then the columns pinned to the
+/// trailing edge, each group keeping its relative order.
+///
+/// Declaration order is not screen order once anything is pinned, and the
+/// difference is user-visible: arrow keys that follow declaration order skip
+/// columns, a range selection covers cells that are not next to each other,
+/// and an export's header does not match the header on screen. Anything that
+/// means "left to right" reads this rather than the column list.
+///
+/// Invisible columns are dropped, because they occupy no screen position.
+List<GridColumn<T>> orderColumnsForDisplay<T>(List<GridColumn<T>> columns) {
+  final leading = <GridColumn<T>>[];
+  final scrolling = <GridColumn<T>>[];
+  final trailing = <GridColumn<T>>[];
+  for (final column in columns) {
+    if (!column.visible) continue;
+    switch (column.pin) {
+      case ColumnPin.start:
+        leading.add(column);
+      case ColumnPin.none:
+        scrolling.add(column);
+      case ColumnPin.end:
+        trailing.add(column);
+    }
+  }
+  return [...leading, ...scrolling, ...trailing];
+}
+
 /// Resolves [columns] into a [GridLayout] for a viewport of [viewportWidth].
 ///
 /// [widthOverrides] carries interactive resizes, keyed by field, so a user's

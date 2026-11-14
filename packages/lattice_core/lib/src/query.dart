@@ -2,6 +2,8 @@
 library;
 
 import 'aggregate.dart';
+import 'decoration.dart';
+import 'fetch.dart';
 import 'filter.dart';
 import 'group.dart';
 import 'sort.dart';
@@ -23,6 +25,8 @@ class GridQuery {
     this.aggregations = const [],
     this.offset = 0,
     this.limit,
+    this.signal,
+    this.lazyGroups = false,
   });
 
   final List<SortSpec> sorts;
@@ -46,6 +50,22 @@ class GridQuery {
   /// Maximum number of rows to return; `null` means all of them.
   final int? limit;
 
+  /// Asks for group headers without their rows.
+  ///
+  /// Grouping normally needs every matching row, because a header has to
+  /// count its group - which means grouping a remote source downloads the
+  /// whole table. A source that can group server-side answers a lazy query
+  /// with headers and counts only (see [GroupNode.declaredCount]), and the
+  /// grid asks for a group's contents when the user opens it.
+  final bool lazyGroups;
+
+  /// Tells the source the grid has given up on this fetch, so a remote
+  /// request can be aborted rather than merely ignored when it lands.
+  ///
+  /// Null when the query was built by hand. Not part of [toJson]: it
+  /// describes one attempt, not what the grid wants to show.
+  final FetchSignal? signal;
+
   bool get hasSearch => search.trim().isNotEmpty;
   bool get isGrouped => groups.isNotEmpty;
   bool get isPaged => limit != null;
@@ -61,6 +81,8 @@ class GridQuery {
     int? offset,
     int? limit,
     bool clearLimit = false,
+    FetchSignal? signal,
+    bool? lazyGroups,
   }) {
     return GridQuery(
       sorts: sorts ?? this.sorts,
@@ -71,6 +93,8 @@ class GridQuery {
       aggregations: aggregations ?? this.aggregations,
       offset: offset ?? this.offset,
       limit: clearLimit ? null : (limit ?? this.limit),
+      signal: signal ?? this.signal,
+      lazyGroups: lazyGroups ?? this.lazyGroups,
     );
   }
 
@@ -82,7 +106,41 @@ class GridQuery {
         if (groups.isNotEmpty) 'groups': [for (final g in groups) g.toJson()],
         if (offset != 0) 'offset': offset,
         if (limit != null) 'limit': limit,
+        if (lazyGroups) 'lazyGroups': true,
       };
+
+  /// Rebuilds a query produced by [toJson].
+  ///
+  /// [aggregations] cannot be serialised - an [Aggregation] may carry a
+  /// reducer function - so they are passed back in. Neither is the
+  /// cancellation [signal], which belongs to one attempt rather than to the
+  /// query, nor a [GroupSpec]'s bucketing functions; see [GroupSpec.restore].
+  static GridQuery fromJson(
+    Map<String, Object?> json, {
+    List<Aggregation> aggregations = const [],
+  }) {
+    return GridQuery(
+      sorts: [
+        for (final s in (json['sorts'] as List? ?? const []))
+          SortSpec.fromJson((s as Map).cast<String, Object?>()),
+      ],
+      filter: json['filter'] == null
+          ? null
+          : Filter.fromJson((json['filter']! as Map).cast<String, Object?>()),
+      search: json['search'] as String? ?? '',
+      searchFields: [
+        for (final f in (json['searchFields'] as List? ?? const [])) '$f',
+      ],
+      groups: [
+        for (final g in (json['groups'] as List? ?? const []))
+          GroupSpec.fromJson((g as Map).cast<String, Object?>()),
+      ],
+      aggregations: aggregations,
+      offset: (json['offset'] as num?)?.toInt() ?? 0,
+      limit: (json['limit'] as num?)?.toInt(),
+      lazyGroups: json['lazyGroups'] == true,
+    );
+  }
 
   @override
   String toString() => 'GridQuery(${toJson()})';
@@ -96,6 +154,7 @@ class GridResult<T> {
     this.groups = const [],
     this.aggregates = const AggregateResult.empty(),
     this.filteredCount,
+    this.stats = const {},
   });
 
   /// The page of data rows, already ordered. Empty when [groups] is used.
@@ -112,6 +171,15 @@ class GridResult<T> {
 
   /// Grid-wide aggregates for the summary footer.
   final AggregateResult aggregates;
+
+  /// Per-column ranges, keyed by field, for conditional formatting.
+  ///
+  /// A local source computes these itself, so this is how a remote one makes
+  /// data bars and colour scales work at all: without a min and a max there
+  /// is nothing to draw a bar against, and a rule over a server-paged column
+  /// silently did nothing. A source that returns stats for a column overrides
+  /// its own [LatticeDataSource.statsFor] for as long as the result stands.
+  final Map<String, ColumnStats> stats;
 
   int get matchedCount => filteredCount ?? totalCount;
 

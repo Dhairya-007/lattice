@@ -504,6 +504,27 @@ class _ResizeHandleState<T> extends State<_ResizeHandle<T>> {
   bool _dragging = false;
   bool _hovered = false;
 
+  /// Fits the column to the widest value the engine samples.
+  void _autoSize() {
+    final theme = widget.theme;
+    final padding = theme.cellPadding.horizontal;
+    final painter = TextPainter(textDirection: TextDirection.ltr);
+    double measure(String text) {
+      painter
+        ..text = TextSpan(text: text, style: theme.cellTextStyle)
+        ..layout();
+      return painter.width;
+    }
+
+    widget.controller.autoSizeColumn(
+      widget.column.field,
+      measure: measure,
+      // The header is set in its own style, and it carries a sort arrow.
+      padding: padding + 24,
+    );
+    painter.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = widget.theme;
@@ -527,8 +548,10 @@ class _ResizeHandleState<T> extends State<_ResizeHandle<T>> {
         },
         onHorizontalDragEnd: (_) => setState(() => _dragging = false),
         onHorizontalDragCancel: () => setState(() => _dragging = false),
-        onDoubleTap: () =>
-            widget.controller.resetColumnWidth(widget.column.field),
+        // Double-click fits the column to its contents, which is what every
+        // grid does and what a user tries first. The engine samples the rows
+        // and asks us for the one thing it cannot do: measure text.
+        onDoubleTap: _autoSize,
         // A grip that shows up under the cursor, so the drag target is
         // discoverable instead of being an invisible strip you find by luck.
         child: Center(
@@ -587,45 +610,37 @@ class _LatticeFilterCellState<T> extends State<LatticeFilterCell<T>> {
     super.dispose();
   }
 
-  /// Picks a sensible operator for the column's type.
+  /// Applies the filter row's text, using the operator the engine offers
+  /// first for this column's type.
   ///
-  /// Text reads as a substring search, which is what a filter row implies;
-  /// numbers, dates and booleans compare for equality, since a substring of a
-  /// number is not a question anyone is asking.
+  /// The order comes from `operatorsFor`, so text reads as a substring search
+  /// and a number compares for equality without this widget deciding that for
+  /// itself - the engine's model of the column is the one place that belongs.
   void _apply(String raw) {
     final field = widget.column.field;
     if (raw.trim().isEmpty) {
       widget.controller.setColumnFilter(field, null);
       return;
     }
-    switch (widget.column.type) {
-      case ColumnType.text:
-      case ColumnType.custom:
-        widget.controller.setColumnFilter(
-          field,
-          FilterCondition(
-            field: field,
-            operator: FilterOperator.contains,
-            value: raw,
-          ),
-        );
-      case ColumnType.number:
-      case ColumnType.date:
-      case ColumnType.boolean:
-        final parsed = coerceValue(raw, widget.column.type);
-        // An unparseable number would match nothing and look like a bug, so
-        // the filter is simply not applied until the text parses.
-        widget.controller.setColumnFilter(
-          field,
-          parsed == null
-              ? null
-              : FilterCondition(
-                  field: field,
-                  operator: FilterOperator.equals,
-                  value: parsed,
-                ),
-        );
+    final operators = operatorsFor(widget.column.type);
+    if (operators.isEmpty) return;
+    final operator = operators.first;
+    final value =
+        operator == FilterOperator.contains ||
+            operator == FilterOperator.startsWith ||
+            operator == FilterOperator.endsWith
+        ? raw
+        : coerceValue(raw, widget.column.type);
+    // An unparseable number would match nothing and look like a bug, so the
+    // filter is simply not applied until the text parses.
+    if (value == null) {
+      widget.controller.setColumnFilter(field, null);
+      return;
     }
+    widget.controller.setColumnFilter(
+      field,
+      FilterCondition(field: field, operator: operator, value: value),
+    );
   }
 
   @override

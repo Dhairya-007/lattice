@@ -1,6 +1,7 @@
 /// Declarative, serialisable filter model.
 library;
 
+import 'column.dart';
 import 'compare.dart';
 
 /// Comparison applied by a [FilterCondition].
@@ -25,6 +26,128 @@ enum FilterOperator {
 
 /// How the children of a [FilterGroup] combine.
 enum FilterJoin { and, or }
+
+/// What a [FilterOperator] needs from the user before it means anything.
+extension FilterOperatorInput on FilterOperator {
+  /// Whether the operator takes a value at all.
+  ///
+  /// An adapter reads this to decide whether to show an input next to the
+  /// operator: `is empty` has nothing to type into.
+  bool get needsValue {
+    switch (this) {
+      case FilterOperator.isNull:
+      case FilterOperator.isNotNull:
+      case FilterOperator.isEmpty:
+      case FilterOperator.isNotEmpty:
+        return false;
+      default:
+        return true;
+    }
+  }
+
+  /// Whether the operator takes a second value, i.e. it is a range.
+  bool get needsSecondValue => this == FilterOperator.between;
+
+  /// Whether the operator takes a set of values rather than one.
+  bool get needsValueSet => this == FilterOperator.isIn;
+
+  /// A short English label, as a starting point for an adapter's menu.
+  ///
+  /// Shipped because every adapter needs one and writing the same switch in
+  /// each of them is how they drift apart. Localised UIs map the enum
+  /// themselves rather than using this.
+  String get defaultLabel {
+    switch (this) {
+      case FilterOperator.equals:
+        return 'equals';
+      case FilterOperator.notEquals:
+        return 'does not equal';
+      case FilterOperator.contains:
+        return 'contains';
+      case FilterOperator.notContains:
+        return 'does not contain';
+      case FilterOperator.startsWith:
+        return 'starts with';
+      case FilterOperator.endsWith:
+        return 'ends with';
+      case FilterOperator.greaterThan:
+        return 'is greater than';
+      case FilterOperator.greaterOrEqual:
+        return 'is at least';
+      case FilterOperator.lessThan:
+        return 'is less than';
+      case FilterOperator.lessOrEqual:
+        return 'is at most';
+      case FilterOperator.between:
+        return 'is between';
+      case FilterOperator.isIn:
+        return 'is one of';
+      case FilterOperator.isNull:
+        return 'is blank';
+      case FilterOperator.isNotNull:
+        return 'is not blank';
+      case FilterOperator.isEmpty:
+        return 'is empty';
+      case FilterOperator.isNotEmpty:
+        return 'is not empty';
+    }
+  }
+}
+
+/// The operators worth offering for a column of [type], most useful first.
+///
+/// [ColumnType] has always claimed to drive this, but the set lived in
+/// whichever adapter needed it, as a switch each one wrote again. It belongs
+/// here: a date column offering `starts with` is a bug in the engine's model
+/// of the column, not in the widget that drew the menu.
+///
+/// The first entry is the sensible default for a fresh filter row.
+List<FilterOperator> operatorsFor(ColumnType type) {
+  switch (type) {
+    case ColumnType.text:
+    case ColumnType.custom:
+      return const [
+        FilterOperator.contains,
+        FilterOperator.notContains,
+        FilterOperator.equals,
+        FilterOperator.notEquals,
+        FilterOperator.startsWith,
+        FilterOperator.endsWith,
+        FilterOperator.isIn,
+        FilterOperator.isEmpty,
+        FilterOperator.isNotEmpty,
+      ];
+    case ColumnType.number:
+      return const [
+        FilterOperator.equals,
+        FilterOperator.notEquals,
+        FilterOperator.greaterThan,
+        FilterOperator.greaterOrEqual,
+        FilterOperator.lessThan,
+        FilterOperator.lessOrEqual,
+        FilterOperator.between,
+        FilterOperator.isIn,
+        FilterOperator.isNull,
+        FilterOperator.isNotNull,
+      ];
+    case ColumnType.date:
+      return const [
+        FilterOperator.equals,
+        FilterOperator.notEquals,
+        FilterOperator.greaterThan,
+        FilterOperator.lessThan,
+        FilterOperator.between,
+        FilterOperator.isNull,
+        FilterOperator.isNotNull,
+      ];
+    case ColumnType.boolean:
+      return const [
+        FilterOperator.equals,
+        FilterOperator.isNull,
+        FilterOperator.isNotNull,
+      ];
+  }
+}
 
 /// Common interface of [FilterCondition] and [FilterGroup].
 ///

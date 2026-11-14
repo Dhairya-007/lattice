@@ -18,6 +18,24 @@
   double-tap window closes, which made every click feel late.
 - Fixed: a page size not present in `pageSizes` replaced the footer with an
   error widget.
+- Tree rows: indentation and a disclosure chevron in the first column on
+  screen, for a grid built with the engine's `TreeSpec`. A leaf still leaves
+  room where its siblings' chevrons are, so the values stay in one column.
+- Double-clicking a resize handle now fits the column to its contents, with a
+  `TextPainter` in the cell's own style; resetting the width to the declared
+  one is still in the column menu.
+- Ctrl-V pastes the clipboard into the selection, and ctrl-Z / ctrl-shift-Z
+  undo and redo, through the engine's `pasteText` and edit history.
+- PageUp/PageDown, Home/End and Tab are now the engine's `movePages`,
+  `moveToLineEdge`, `moveToGridEdge` and `moveToNextEditableCell` rather than
+  row arithmetic in the widget. Two behaviour changes follow: Home and End
+  move along the row, with ctrl-Home and ctrl-End going to the corners of the
+  grid, and Tab walks the editable cells where there are any.
+- A group header shows that it is waiting when a lazily grouped source has
+  not sent its rows yet, instead of looking like an empty group.
+- The filter row takes its operator from the engine's `operatorsFor`, and
+  aggregate cells format through `Aggregation.format`, so neither decides for
+  itself what a column type means.
 
 ## 0.1.0
 

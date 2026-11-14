@@ -10,13 +10,15 @@ Everything a data grid does other than paint lives here:
 | Columns | typed accessors, formatters, comparators, width bounds, pinning, visibility, edit hooks |
 | Sorting | multi-column, stable, custom comparators, explicit null placement |
 | Filtering | a serialisable condition/group tree, 16 operators, free-text search |
-| Grouping | nested levels, derived keys, path-keyed expansion state |
+| Grouping | nested levels, derived keys, path-keyed expansion, server-side and lazy |
+| Tree data | parent/child rows, from a nested model or a parent reference |
 | Aggregation | sum, average, min, max, count, distinct count, custom reducers |
 | Virtualization | uniform and variable row heights, scroll-to-reveal, column windowing |
 | Layout | leading / scrolling / trailing panes, stretch and last-column fit |
 | Selection | single and multi row, single cell, rectangular ranges, ctrl / shift semantics |
-| Editing | validated edit sessions with commit and rollback |
+| Editing | validated edit sessions, optimistic writes, paste into a range, undo/redo |
 | Export | RFC 4180 CSV, grouped CSV, tab-separated clipboard text |
+| Saved views | the whole arrangement - query, columns, widths, pins - as JSON |
 
 ## Why a separate package
 
@@ -89,7 +91,100 @@ final source = AsyncDataSource<Employee>((query) async {
 ```
 
 Concurrent fetches are token-guarded by the controller, so a slow response from
-an earlier query can never overwrite a newer one.
+an earlier query can never overwrite a newer one. A superseded fetch is also
+handed a cancelled `query.signal`, so the request can be aborted rather than
+merely ignored when it lands:
+
+```dart
+final source = AsyncDataSource<Employee>(
+  (query) async {
+    final response = await api.get(
+      '/employees',
+      query: query.toJson(),
+      // Any client with an abort flag: the signal fires when the grid has
+      // moved on.
+      abort: query.signal,
+    );
+    return GridResult(
+      rows: response.rows.map(Employee.fromJson).toList(),
+      totalCount: response.total,
+      // Without these, a data bar over a server-paged column has no range to
+      // draw against.
+      stats: response.stats,
+    );
+  },
+  // A source is editable when it has somewhere to put a write.
+  onCommit: (original, updated) => api.put('/employees/${updated.id}', updated),
+);
+
+final controller = GridController<Employee>(
+  columns: columns,
+  dataSource: source,
+  // Rows are recognised by identity, so a refresh cannot move the user's
+  // selection onto a different row.
+  rowKey: (e) => e.id,
+  // One request per typed word rather than per keystroke.
+  fetchDebounce: const Duration(milliseconds: 250),
+);
+```
+
+### Grouping a large backend
+
+Grouping normally needs every matching row, because the grid counts the groups
+itself. A source that can group server-side answers a lazy query with headers
+and counts, and the grid asks for a group's rows when the user opens it:
+
+```dart
+class EmployeeSource extends LatticeDataSource<Employee> {
+  @override
+  bool get supportsLazyGroups => true;
+
+  @override
+  Future<GridResult<Employee>> fetch(GridQuery query) async {
+    if (!query.lazyGroups) return _page(query);
+    final counts = await api.groupCounts(query);
+    return GridResult(
+      rows: const [],
+      totalCount: counts.total,
+      groups: [
+        for (final group in counts.groups)
+          GroupNode<Employee>(
+            field: group.field,
+            key: group.key,
+            label: group.label,
+            depth: 0,
+            path: group.key,
+            keys: [GroupKey(group.field, group.key)],
+            declaredCount: group.count,
+            loaded: false,
+          ),
+      ],
+    );
+  }
+
+  @override
+  Future<GroupChildren<Employee>> fetchGroupChildren(
+    GridQuery query,
+    GroupNode<Employee> node,
+  ) async {
+    final rows = await api.rowsIn(node.keys, query);
+    return GroupChildren(rows: rows);
+  }
+}
+```
+
+### Saving a view
+
+```dart
+final json = jsonEncode(controller.saveState().toJson());
+// ... later, on another device
+controller.restoreState(
+  GridViewState.fromJson(jsonDecode(json) as Map<String, Object?>),
+);
+```
+
+Functions cannot be serialised, so a grouping with a `keyOf` is restored by
+supplying it again through `restoreState`'s `resolveGroup`.
 
 ## Performance notes
 

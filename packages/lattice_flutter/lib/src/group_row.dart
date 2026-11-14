@@ -30,9 +30,8 @@ class LatticeGroupRowCells<T> extends StatelessWidget {
       if (aggregation.field != field) continue;
       final value = row.aggregates.of(aggregation);
       if (value == null) continue;
-      final text = value is double ? value.toStringAsFixed(2) : '$value';
       final label = aggregation.label ?? aggregation.type.name;
-      return '$label $text';
+      return '$label ${aggregation.formatted(value)}';
     }
     return null;
   }
@@ -99,7 +98,8 @@ class _GroupLabel<T> extends StatelessWidget {
       // the chevron alone cannot give them.
       label:
           '${column?.title ?? row.field} ${row.label}, '
-          '${row.rowCount} rows, ${row.expanded ? 'expanded' : 'collapsed'}',
+          '${row.rowCount} rows, ${row.expanded ? 'expanded' : 'collapsed'}'
+          '${row.loading ? ', loading' : ''}',
       button: true,
       hint: row.expanded ? 'Activate to collapse' : 'Activate to expand',
       onTap: () => controller.toggleGroup(row.path),
@@ -141,6 +141,19 @@ class _GroupLabel<T> extends StatelessWidget {
                 ),
                 const SizedBox(width: 6),
                 Text('(${row.rowCount})', style: theme.footerTextStyle),
+                // A lazily grouped source has the header before it has the
+                // rows; an open group that says nothing looks empty.
+                if (row.loading) ...[
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: theme.footerTextStyle.color,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
