@@ -15,6 +15,7 @@ export 'src/data_source.dart';
 export 'src/decoration.dart';
 export 'src/editing.dart';
 export 'src/export.dart';
+export 'src/fetch.dart';
 export 'src/filter.dart';
 export 'src/group.dart';
 export 'src/layout.dart';

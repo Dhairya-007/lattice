@@ -2,6 +2,7 @@
 library;
 
 import 'aggregate.dart';
+import 'fetch.dart';
 import 'filter.dart';
 import 'group.dart';
 import 'sort.dart';
@@ -23,6 +24,7 @@ class GridQuery {
     this.aggregations = const [],
     this.offset = 0,
     this.limit,
+    this.signal,
   });
 
   final List<SortSpec> sorts;
@@ -46,6 +48,13 @@ class GridQuery {
   /// Maximum number of rows to return; `null` means all of them.
   final int? limit;
 
+  /// Tells the source the grid has given up on this fetch, so a remote
+  /// request can be aborted rather than merely ignored when it lands.
+  ///
+  /// Null when the query was built by hand. Not part of [toJson]: it
+  /// describes one attempt, not what the grid wants to show.
+  final FetchSignal? signal;
+
   bool get hasSearch => search.trim().isNotEmpty;
   bool get isGrouped => groups.isNotEmpty;
   bool get isPaged => limit != null;
@@ -61,6 +70,7 @@ class GridQuery {
     int? offset,
     int? limit,
     bool clearLimit = false,
+    FetchSignal? signal,
   }) {
     return GridQuery(
       sorts: sorts ?? this.sorts,
@@ -71,6 +81,7 @@ class GridQuery {
       aggregations: aggregations ?? this.aggregations,
       offset: offset ?? this.offset,
       limit: clearLimit ? null : (limit ?? this.limit),
+      signal: signal ?? this.signal,
     );
   }
 

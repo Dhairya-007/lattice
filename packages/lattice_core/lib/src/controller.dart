@@ -1,12 +1,15 @@
 /// The grid's single source of truth.
 library;
 
+import 'dart:async';
+
 import 'aggregate.dart';
 import 'column.dart';
 import 'data_source.dart';
 import 'decoration.dart';
 import 'editing.dart';
 import 'export.dart';
+import 'fetch.dart';
 import 'filter.dart';
 import 'group.dart';
 import 'layout.dart';
@@ -39,6 +42,8 @@ class GridController<T> with GridChangeNotifier {
     bool groupsExpandedByDefault = true,
     this.columnFit = ColumnFit.none,
     this.rowKey,
+    this.fetchDebounce,
+    this.keepRowsOnError = false,
   })  : _columns = List<GridColumn<T>>.of(columns),
         _dataSource = dataSource,
         _sorts = List<SortSpec>.of(sorts),
@@ -90,6 +95,21 @@ class GridController<T> with GridChangeNotifier {
 
   /// How spare horizontal space is used.
   ColumnFit columnFit;
+
+  /// How long to wait before sending a coalescing refresh, or null for none.
+  ///
+  /// Applies to the interactions a user drives a character at a time - the
+  /// search box and the filter row - and only to a source that is not local.
+  /// A few hundred milliseconds turns a typed word into one request.
+  Duration? fetchDebounce;
+
+  /// Whether a failed fetch keeps the rows it was replacing.
+  ///
+  /// Off by default, because stale rows presented as current are a worse lie
+  /// than an empty grid. Turn it on for a dashboard that polls, where one
+  /// dropped response should not blank the screen; show [error] alongside
+  /// them so the user knows what they are looking at is not fresh.
+  bool keepRowsOnError;
 
   /// Recognises a row across rebuilds: a primary key, not a position.
   ///
@@ -236,10 +256,59 @@ class GridController<T> with GridChangeNotifier {
   /// Re-runs the query and rebuilds [visibleRows].
   ///
   /// Concurrent fetches are token-guarded, so a slow response from an earlier
-  /// query can never overwrite the result of a newer one.
-  Future<void> refresh() async {
+  /// query can never overwrite the result of a newer one, and the superseded
+  /// fetch is handed a cancelled [FetchSignal] so a source that honours it
+  /// can stop work it no longer has to finish.
+  ///
+  /// With [coalesce] true and [fetchDebounce] set, the fetch is deferred and
+  /// folded into any other coalescing refresh that arrives inside the window.
+  /// That is what keeps a filter row from sending one request per keystroke.
+  /// A local source is never debounced: it answers inside the frame, so
+  /// delaying it would only make typing feel slow.
+  Future<void> refresh({bool coalesce = false}) {
+    final delay = fetchDebounce;
+    if (coalesce &&
+        delay != null &&
+        delay > Duration.zero &&
+        !_dataSource.isLocal) {
+      // The in-flight request is answering a query the user has already moved
+      // on from.
+      _cancelFetch('superseded by a newer query');
+      _debounceTimer?.cancel();
+      final completer = _debounced ??= Completer<void>();
+      _loading = true;
+      _error = null;
+      notifyListeners();
+      _debounceTimer = Timer(delay, () {
+        _debounceTimer = null;
+        _debounced = null;
+        _fetch().whenComplete(() {
+          if (!completer.isCompleted) completer.complete();
+        });
+      });
+      return completer.future;
+    }
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    return _fetch();
+  }
+
+  Timer? _debounceTimer;
+  Completer<void>? _debounced;
+  FetchSignal? _signal;
+
+  /// Whether a debounced refresh is waiting to be sent.
+  bool get isFetchPending => _debounceTimer != null;
+
+  void _cancelFetch(String reason) {
+    _signal?.cancel(reason);
+    _signal = null;
+  }
+
+  Future<void> _fetch() async {
     final token = ++_fetchToken;
     final source = _dataSource;
+    _cancelFetch('superseded by a newer query');
 
     // A local source answers synchronously; resolving it inline avoids a
     // frame of empty grid on the very first build.
@@ -250,19 +319,25 @@ class GridController<T> with GridChangeNotifier {
       return;
     }
 
+    final signal = FetchSignal();
+    _signal = signal;
     _loading = true;
     _error = null;
     notifyListeners();
     try {
-      final result = await source.fetch(query);
+      final result = await source.fetch(query.copyWith(signal: signal));
       if (token != _fetchToken || isDisposed) return;
       _loading = false;
       _apply(result);
+    } on FetchCancelled {
+      // A cancelled fetch has no answer and is not a failure: the refresh
+      // that replaced it owns the state now.
+      return;
     } catch (error) {
       if (token != _fetchToken || isDisposed) return;
       _loading = false;
       _error = error;
-      _visibleRows = const [];
+      if (!keepRowsOnError) _visibleRows = const [];
       notifyListeners();
     }
   }
@@ -401,7 +476,7 @@ class GridController<T> with GridChangeNotifier {
       _columnFilters[field] = condition;
     }
     _pageIndex = 0;
-    refresh();
+    refresh(coalesce: true);
   }
 
   /// Sets a structured filter that sits alongside the per-column filter row.
@@ -425,7 +500,7 @@ class GridController<T> with GridChangeNotifier {
     if (_search == text) return;
     _search = text;
     _pageIndex = 0;
-    refresh();
+    refresh(coalesce: true);
   }
 
   // -- Grouping -------------------------------------------------------------
@@ -961,6 +1036,9 @@ class GridController<T> with GridChangeNotifier {
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _cancelFetch('the grid was disposed');
     _dataSource.removeListener(_onSourceChanged);
     super.dispose();
   }
