@@ -106,3 +106,22 @@ jobs:
         if: steps.check.outputs.exists == 'true'
         working-directory: packages/lattice_flutter
         run: flutter test --reporter expanded
+
+      # The example is a package of its own, so its tests need their own
+      # run. They are what proves the demo survives a narrow window, which
+      # matters because a RenderFlex overflow is an exception in a test but
+      # only a yellow stripe in a running app.
+      - name: Install example dependencies
+        if: steps.check.outputs.exists == 'true'
+        working-directory: packages/lattice_flutter/example
+        run: flutter pub get
+
+      - name: Analyze the example
+        if: steps.check.outputs.exists == 'true'
+        working-directory: packages/lattice_flutter/example
+        run: flutter analyze
+
+      - name: Test the example
+        if: steps.check.outputs.exists == 'true'
+        working-directory: packages/lattice_flutter/example
+        run: flutter test --reporter expanded
