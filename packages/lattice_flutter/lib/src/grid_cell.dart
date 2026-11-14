@@ -29,6 +29,7 @@ class LatticeCell<T> extends StatelessWidget {
     this.decoration = CellDecoration.none,
     this.highlightChanges = false,
     this.rowId,
+    this.leading,
     super.key,
   });
 
@@ -53,6 +54,12 @@ class LatticeCell<T> extends StatelessWidget {
   /// Identity of the row, so a flash can tell an updated value from a row
   /// that merely moved into this position.
   final Object? rowId;
+
+  /// Drawn before the value, inside the cell's padding.
+  ///
+  /// How a tree's indentation and its disclosure control reach the first
+  /// column without taking width away from the cell or from the value.
+  final Widget? leading;
 
   static Alignment _alignmentFor(ColumnAlign align) {
     switch (align) {
@@ -117,6 +124,16 @@ class LatticeCell<T> extends StatelessWidget {
         color: theme.changeFlashColor,
         duration: theme.changeFlashDuration,
         child: content,
+      );
+    }
+
+    final indent = leading;
+    if (indent != null) {
+      content = Row(
+        children: [
+          indent,
+          Flexible(child: content),
+        ],
       );
     }
 

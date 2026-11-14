@@ -38,11 +38,11 @@ class LatticeGridFooter<T> extends StatelessWidget {
     for (final aggregation in controller.aggregations) {
       final value = controller.aggregates.of(aggregation);
       if (value == null) continue;
-      final text = value is double ? value.toStringAsFixed(2) : '$value';
       final column = controller.column(aggregation.field);
       parts.add(
         '${aggregation.label ?? '${column?.title ?? aggregation.field} '
-                '${aggregation.type.name}'}: $text',
+                '${aggregation.type.name}'}: '
+        '${aggregation.formatted(value)}',
       );
     }
     return parts.isEmpty ? null : parts.join('   ');

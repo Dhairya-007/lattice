@@ -249,26 +249,56 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
       _move(0, -1, extend: shift);
       return KeyEventResult.handled;
     }
+    if (meta && key == LogicalKeyboardKey.keyV) {
+      _paste();
+      return KeyEventResult.handled;
+    }
+    if (meta && key == LogicalKeyboardKey.keyZ) {
+      if (shift) {
+        _controller.redo();
+      } else {
+        _controller.undo();
+      }
+      return KeyEventResult.handled;
+    }
+    if (meta && key == LogicalKeyboardKey.keyY) {
+      _controller.redo();
+      return KeyEventResult.handled;
+    }
     if (key == LogicalKeyboardKey.tab) {
-      _move(0, shift ? -1 : 1);
+      // Tab walks the editable cells, which is what makes a grid usable as a
+      // form. With nothing editable the engine returns null and Tab stays a
+      // plain column move.
+      final landed = _controller.moveToNextEditableCell(backwards: shift);
+      if (landed == null) {
+        _move(0, shift ? -1 : 1);
+      } else {
+        _revealRow(landed.row);
+      }
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.pageDown ||
         key == LogicalKeyboardKey.pageUp) {
       final rows = (_vertical.viewportExtent / _rowHeight).floor();
-      _move(
-        key == LogicalKeyboardKey.pageDown ? rows : -rows,
-        0,
+      _controller.movePages(
+        key == LogicalKeyboardKey.pageDown ? 1 : -1,
+        rowsPerPage: rows < 1 ? 1 : rows,
         extend: shift,
       );
+      _revealActive();
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.home || key == LogicalKeyboardKey.end) {
-      final target = key == LogicalKeyboardKey.home
-          ? 0
-          : _controller.rowCount - 1;
-      final current = _controller.selection.activeCell?.row ?? 0;
-      _move(target - current, 0, extend: shift);
+      // Home and End move along the row, ctrl-Home and ctrl-End to the
+      // corners of the grid - the spreadsheet convention, and the reason
+      // both exist.
+      final start = key == LogicalKeyboardKey.home;
+      if (meta) {
+        _controller.moveToGridEdge(start: start, extend: shift);
+      } else {
+        _controller.moveToLineEdge(start: start, extend: shift);
+      }
+      _revealActive();
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.space) {
@@ -292,8 +322,24 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
 
   void _move(int rowDelta, int columnDelta, {bool extend = false}) {
     _controller.moveActiveCell(rowDelta, columnDelta, extend: extend);
+    _revealActive();
+  }
+
+  void _revealActive() {
     final active = _controller.selection.activeCell;
     if (active != null) _revealRow(active.row);
+  }
+
+  /// Pastes the clipboard into the selection.
+  ///
+  /// Reading the clipboard is asynchronous, so the key handler cannot wait for
+  /// it; the engine does the parsing, validating and writing once the text
+  /// arrives.
+  Future<void> _paste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty || !mounted) return;
+    _controller.pasteText(text);
   }
 
   /// Scrolls the row into view, moving as little as possible.
@@ -1004,8 +1050,50 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
                 index: index,
                 theme: theme,
                 isLastInPane: i == columns.length - 1,
+                // The tree affordance belongs to one column: the first one on
+                // screen. Repeating it in a frozen pane would draw two.
+                isTreeColumn: isFirstPane && i == 0,
               ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Indentation and a disclosure control for a row inside a tree.
+  ///
+  /// Null unless the grid is showing a hierarchy, so a flat grid pays
+  /// nothing and looks exactly as it did.
+  Widget? _treeLeading(DataGridRow<T> row, LatticeGridTheme theme) {
+    if (row.treePath.isEmpty) return null;
+    final indent = row.depth * theme.groupIndent;
+    if (!row.hasChildren) {
+      // A leaf still indents, and still leaves room where its siblings'
+      // chevrons are, so the values stay in one column.
+      return SizedBox(width: indent + 20);
+    }
+    return Semantics(
+      label: row.expanded ? 'Collapse row' : 'Expand row',
+      button: true,
+      child: Padding(
+        padding: EdgeInsets.only(left: indent),
+        child: GestureDetector(
+          excludeFromSemantics: true,
+          onTap: () => _controller.toggleRow(row.treePath),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: AnimatedRotation(
+              turns: row.expanded ? 0.25 : 0,
+              duration: theme.animations
+                  ? const Duration(milliseconds: 120)
+                  : Duration.zero,
+              child: Icon(
+                Icons.chevron_right,
+                size: 18,
+                color: theme.cellTextStyle.color,
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -1017,6 +1105,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
     required int index,
     required LatticeGridTheme theme,
     required bool isLastInPane,
+    bool isTreeColumn = false,
   }) {
     final address = CellAddress(index, laid.column.field);
     final rowId = widget.rowId?.call(row.data);
@@ -1042,6 +1131,7 @@ class _LatticeDataGridState<T> extends State<LatticeDataGrid<T>> {
         decoration: _controller.decorationFor(laid.column.field, row.data),
         highlightChanges: widget.highlightChanges,
         rowId: rowId,
+        leading: isTreeColumn ? _treeLeading(row, theme) : null,
       ),
     );
   }
