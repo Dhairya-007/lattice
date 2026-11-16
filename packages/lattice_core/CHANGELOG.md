@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.1
+
+Package metadata only; no code change.
+
+0.4.0's pubspec description and screenshot description were both over the
+lengths pub.dev scores them against - 180 characters for the description,
+160 for a screenshot's - which cost the package 20 of its points. Neither
+limit is checked by `dart pub publish --dry-run`, and the upload itself
+enforces a *different* screenshot limit (200), so the only way to find out
+was to publish. Both are inside both limits now, and the pubspec says so
+beside each one.
+
 ## 0.4.0
 
 A customer read all ~7,000 lines of the engine, wrote a probe per suspected

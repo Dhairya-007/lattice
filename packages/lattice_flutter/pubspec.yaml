@@ -1,8 +1,9 @@
 name: lattice_flutter
+# Between 60 and 180 characters; pub.dev scores it. 161.
 description: >-
   Open source Flutter data grid and data table: frozen columns, virtualized
-  rows, multi-column sorting, filtering, search, grouping with aggregates,
-  tree rows, range selection, inline editing, CSV export and paging.
+  rows, sorting, filtering, grouping with aggregates, range selection and
+  inline editing.
 version: 0.1.0
 homepage: https://github.com/Dhairya-007/lattice
 repository: https://github.com/Dhairya-007/lattice
@@ -12,13 +13,13 @@ issue_tracker: https://github.com/Dhairya-007/lattice/issues
 # the grid's parts rather than screenshots of the app, because a recording of
 # the example app needs a machine with the Flutter SDK.
 #
-# pub.dev refuses a description over 200 characters, and refuses it at upload
-# rather than in `dart pub publish --dry-run`.
+# Two limits, neither checked by `dart pub publish --dry-run`: the upload
+# refuses over 200 characters, and the package score wants under 160. 154.
 screenshots:
   - description: >-
       Labelled diagram of the grid: a frozen column, a multi-sort header, a
-      filter row, a group header with its subtotal, a selected range, a cell
-      being edited, and a summary footer.
+      filter row, a group header with its subtotal, a selected range and a
+      summary footer.
     path: doc/anatomy-light.png
   - description: The same diagram in dark mode, which the theme follows.
     path: doc/anatomy-dark.png
