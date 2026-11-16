@@ -1655,25 +1655,41 @@ class GridController<T> with GridChangeNotifier {
       notifyListeners(changes: const {GridChange.edit});
       return result;
     }
-    if (session.value != session.originalValue) {
-      _history.record(EditAction<T>(
-        label: 'Edit ${session.column.title}',
-        changes: [
-          CellEdit<T>(
-            row: row,
-            field: session.cell.field,
-            before: session.originalValue,
-            after: session.value,
-          ),
-        ],
-      ));
+    if (session.value == session.originalValue) {
+      // Nothing changed, so there is nothing to save and nothing to undo.
+      // Writing anyway sent a request to the server and refetched the grid
+      // for a cell the user had only looked at.
+      notifyListeners(changes: const {GridChange.edit});
+      return result;
     }
-    _pendingWrite = _write(session.row, row);
+    _history.record(EditAction<T>(
+      label: 'Edit ${session.column.title}',
+      changes: [
+        CellEdit<T>(
+          row: row,
+          field: session.cell.field,
+          before: session.originalValue,
+          after: session.value,
+        ),
+      ],
+    ));
+    _pendingWrite = _write(
+      session.row,
+      row,
+      before: {session.cell.field: session.originalValue},
+    );
     return result;
   }
 
   /// Rows written but not yet confirmed by the source, keyed by identity.
-  final Map<Object, T> _pendingWrites = {};
+  ///
+  /// Each entry remembers which write owns it, so that a write finishing
+  /// cannot clear the entry a newer write for the same row has since put
+  /// there. It used to remove the key unconditionally, which made a slow
+  /// first write wipe the second one: the cell went back to showing the
+  /// first value while the second was still in flight.
+  final Map<Object, _PendingWrite<T>> _pendingWrites = {};
+  int _writeSequence = 0;
   Object? _writeError;
   Future<void>? _pendingWrite;
 
@@ -1705,10 +1721,17 @@ class GridController<T> with GridChangeNotifier {
   /// an immutable model wants a [rowKey].
   Object _identityOf(T row) => rowKey?.call(row) ?? row as Object;
 
-  T _substituteWrite(T row) => _pendingWrites[_identityOf(row)] ?? row;
+  T _substituteWrite(T row) => _pendingWrites[_identityOf(row)]?.row ?? row;
 
-  Future<void> _write(T original, T updated) =>
-      _writeAll([RowUpdate<T>(original, updated)]);
+  Future<void> _write(
+    T original,
+    T updated, {
+    Map<String, Object?>? before,
+  }) =>
+      _writeAll(
+        [RowUpdate<T>(original, updated)],
+        before: before == null ? null : [before],
+      );
 
   /// Sends committed rows to the source, showing them immediately and rolling
   /// them back if the source refuses them.
@@ -1716,7 +1739,15 @@ class GridController<T> with GridChangeNotifier {
   /// One call is one change: a paste across twenty rows goes down as a single
   /// batch and the grid re-queries once, because twenty write-through
   /// refreshes would also be twenty re-sorts.
-  Future<void> _writeAll(List<RowUpdate<T>> writes) async {
+  ///
+  /// [before] holds each row's previous values by field, which is what a
+  /// rollback needs for a model whose setter mutates in place: dropping the
+  /// overlay puts the *overlay* back, not the row, and the object stayed
+  /// mutated with the value the source had just refused.
+  Future<void> _writeAll(
+    List<RowUpdate<T>> writes, {
+    List<Map<String, Object?>>? before,
+  }) async {
     if (writes.isEmpty) return;
     final source = _dataSource;
     if (!source.canCommit) {
@@ -1737,37 +1768,71 @@ class GridController<T> with GridChangeNotifier {
         await source.commitAll(writes);
       } catch (error) {
         if (isDisposed) return;
+        _rollback(writes, before);
         _writeError = error;
-        notifyListeners(changes: const {GridChange.status});
+        notifyListeners(changes: const {GridChange.rows, GridChange.status});
       }
       return;
     }
 
+    final sequence = ++_writeSequence;
     final keys = [for (final write in writes) _identityOf(write.original)];
     for (var i = 0; i < writes.length; i++) {
-      _pendingWrites[keys[i]] = writes[i].updated;
+      _pendingWrites[keys[i]] = _PendingWrite<T>(writes[i].updated, sequence);
     }
     _writeError = null;
     _reapply();
+
+    /// Drops only the entries this write still owns.
+    void releaseOwn() {
+      for (final key in keys) {
+        if (_pendingWrites[key]?.sequence == sequence) {
+          _pendingWrites.remove(key);
+        }
+      }
+    }
+
     try {
       final stored = await source.commitAll(writes);
       if (isDisposed) return;
-      // The source may have normalised the values; show what it returned.
+      // The source may have normalised the values; show what it returned -
+      // unless a newer write for the same row has taken the slot, in which
+      // case the newer value is the one on screen and the one to keep.
       for (var i = 0; i < keys.length && i < stored.length; i++) {
-        _pendingWrites[keys[i]] = stored[i];
+        if (_pendingWrites[keys[i]]?.sequence == sequence) {
+          _pendingWrites[keys[i]] = _PendingWrite<T>(stored[i], sequence);
+        }
       }
       // Re-query, so an edit that changed a sort or filter key moves its row.
       // The pending values cover the gap until the source's own copies carry
       // them.
       await refresh();
       if (isDisposed) return;
-      keys.forEach(_pendingWrites.remove);
+      releaseOwn();
       _reapply();
     } catch (error) {
       if (isDisposed) return;
-      keys.forEach(_pendingWrites.remove);
+      releaseOwn();
+      _rollback(writes, before);
       _writeError = error;
       _reapply();
+    }
+  }
+
+  /// Puts the previous values back through the columns' setters.
+  ///
+  /// For an immutable model this is a no-op in effect - the setter returns a
+  /// copy and the row the source holds was never touched - and for a model
+  /// that mutates in place it is the only way back: the row object itself
+  /// carries the refused value until something overwrites it.
+  void _rollback(
+      List<RowUpdate<T>> writes, List<Map<String, Object?>>? before) {
+    if (before == null) return;
+    final byField = columnsByField;
+    for (var i = 0; i < writes.length && i < before.length; i++) {
+      for (final entry in before[i].entries) {
+        byField[entry.key]?.setValue?.call(writes[i].original, entry.value);
+      }
     }
   }
 
@@ -1895,7 +1960,8 @@ class GridController<T> with GridChangeNotifier {
     }
 
     _history.record(EditAction<T>(label: 'Paste', changes: changes));
-    _pendingWrite = _writeAll(_updatesFor(patches));
+    final before = _beforeValuesFor(patches);
+    _pendingWrite = _writeAll(_updatesFor(patches), before: before);
     notifyListeners(changes: const {GridChange.rows, GridChange.status});
     return PasteResult(
       rowsChanged: patches.length,
@@ -1909,6 +1975,18 @@ class GridController<T> with GridChangeNotifier {
   List<RowUpdate<T>> _updatesFor(List<_RowPatch<T>> patches) => [
         for (final patch in patches)
           RowUpdate<T>(patch.row, _withValues(patch.row, patch.values)),
+      ];
+
+  /// The values each patch is about to overwrite, by field.
+  ///
+  /// Read before the setters run, because a setter that mutates in place
+  /// destroys the only copy of them.
+  List<Map<String, Object?>> _beforeValuesFor(List<_RowPatch<T>> patches) => [
+        for (final patch in patches)
+          {
+            for (final field in patch.values.keys)
+              field: column(field)?.value(patch.row),
+          },
       ];
 
   /// Applies several cell values to one row, through the columns' setters.
@@ -1938,27 +2016,64 @@ class GridController<T> with GridChangeNotifier {
 
   /// Takes back the last committed edit or paste, as one step.
   ///
-  /// Returns false when there is nothing to undo, or when the rows an action
-  /// touched can no longer be found - deleted, or filtered out of the current
-  /// view. Finding them needs either a [rowKey] or a row model whose setter
-  /// mutates in place; an immutable model without a key cannot be matched to
-  /// the instances the source now holds.
-  bool undo() => _replay(_history.takeUndo()?.inverse);
+  /// Returns false when there is nothing to undo, or when not one of the rows
+  /// the action touched could be found. The history is only moved when
+  /// something was actually written, so an undo that cannot be applied leaves
+  /// the step where it was rather than consuming it - which used to make the
+  /// edit permanently unrepeatable, with `canUndo` false and `canRedo` true.
+  ///
+  /// Rows are resolved through the data source, not through what is on
+  /// screen, so an undo reaches a row on another page, inside a closed group
+  /// or filtered out of view. A source that pages a backend cannot offer that
+  /// - see [LatticeDataSource.localRows] - and [lastReplay] then says how
+  /// many cells were skipped.
+  bool undo() {
+    final action = _history.peekUndo();
+    if (action == null) return false;
+    final outcome = _replay(action.inverse);
+    if (!outcome.didAnything) return false;
+    _history.commitUndo();
+    return true;
+  }
 
   /// Re-applies the edit [undo] took back.
-  bool redo() => _replay(_history.takeRedo());
+  bool redo() {
+    final action = _history.peekRedo();
+    if (action == null) return false;
+    final outcome = _replay(action);
+    if (!outcome.didAnything) return false;
+    _history.commitRedo();
+    return true;
+  }
 
   bool get canUndo => _history.canUndo;
   bool get canRedo => _history.canRedo;
 
-  bool _replay(EditAction<T>? action) {
-    if (action == null || action.isEmpty) return false;
+  ReplayOutcome _lastReplay = const ReplayOutcome.nothing();
+
+  /// What came of the last [undo] or [redo]: how many cells were written and
+  /// how many could not be found.
+  ///
+  /// A partial undo is a real outcome - some of the rows an action touched
+  /// may be gone - and a bare bool could not report it.
+  ReplayOutcome get lastReplay => _lastReplay;
+
+  ReplayOutcome _replay(EditAction<T>? action) {
+    if (action == null || action.isEmpty) {
+      return _lastReplay = const ReplayOutcome.nothing();
+    }
     final patches = <_RowPatch<T>>[];
     final slots = <Object, int>{};
+    var applied = 0;
+    var unresolved = 0;
 
     for (final change in action.changes) {
       final current = _currentRowFor(change.row);
-      if (current == null) continue;
+      if (current == null) {
+        unresolved++;
+        continue;
+      }
+      applied++;
       final identity = _identityOf(current);
       var slot = slots[identity];
       if (slot == null) {
@@ -1968,25 +2083,64 @@ class GridController<T> with GridChangeNotifier {
       }
       patches[slot].values[change.field] = change.after;
     }
-    if (patches.isEmpty) return false;
+    if (patches.isEmpty) {
+      return _lastReplay = ReplayOutcome(applied: 0, unresolved: unresolved);
+    }
 
-    _pendingWrite = _writeAll(_updatesFor(patches));
+    final before = _beforeValuesFor(patches);
+    _pendingWrite = _writeAll(_updatesFor(patches), before: before);
     notifyListeners(changes: const {GridChange.rows, GridChange.status});
-    return true;
+    return _lastReplay =
+        ReplayOutcome(applied: applied, unresolved: unresolved);
   }
 
   /// The instance the grid currently holds for [row], matched by [rowKey]
   /// where there is one.
+  ///
+  /// Looks through the data source rather than through the visible rows: an
+  /// undo has to reach a row that is filtered out, on another page or inside
+  /// a closed group, and searching the view silently skipped it.
   T? _currentRowFor(T row) {
     final key = rowKey;
     if (key == null) return row;
     final wanted = key(row);
+    final index = _keyIndex();
+    if (index != null) return index[wanted];
     for (final visible in _visibleRows) {
       if (visible is DataGridRow<T> && key(visible.data) == wanted) {
         return visible.data;
       }
     }
     return null;
+  }
+
+  Map<Object, T>? _keyIndexCache;
+  int _keyIndexRevision = -1;
+  int _keyIndexGeneration = -1;
+
+  /// Every row the source holds, by [rowKey], or null when the source cannot
+  /// enumerate its rows.
+  ///
+  /// Built once per source revision and shared by everything that has to find
+  /// a row it is not showing.
+  Map<Object, T>? _keyIndex() {
+    final key = rowKey;
+    if (key == null) return null;
+    final rows = _dataSource.localRows;
+    if (rows == null) return null;
+    if (_keyIndexCache != null &&
+        _keyIndexRevision == _dataSource.revision &&
+        _keyIndexGeneration == _sourceGeneration) {
+      return _keyIndexCache;
+    }
+    final index = <Object, T>{};
+    for (final row in rows) {
+      index[key(row)] = row;
+    }
+    _keyIndexCache = index;
+    _keyIndexRevision = _dataSource.revision;
+    _keyIndexGeneration = _sourceGeneration;
+    return index;
   }
 
   void cancelEdit() {
@@ -2191,6 +2345,16 @@ class GridController<T> with GridChangeNotifier {
     _dataSource.removeListener(_onSourceChanged);
     super.dispose();
   }
+}
+
+/// One row written and not yet confirmed, and the write that owns it.
+class _PendingWrite<T> {
+  const _PendingWrite(this.row, this.sequence);
+
+  final T row;
+
+  /// Which write put this here, so a finishing write only clears its own.
+  final int sequence;
 }
 
 /// A row and the cell values bound for it.

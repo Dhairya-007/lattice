@@ -192,11 +192,18 @@ void main() {
       expect(labelsOf(grid), isNot(contains('Zebra')));
     });
 
-    test('undo cannot reach a row that is no longer in view', () {
+    test('undo reaches a row the current search hides', () {
+      // The row is still in the data, so the edit is still undoable: looking
+      // for it among the visible rows alone left the change in place for
+      // good, because the step had already moved to the redo stack.
       final grid = editGrid();
       grid.pasteText('Zebra', at: const CellAddress(0, 'name'));
       grid.setSearch('mouse');
-      expect(grid.undo(), isFalse);
+      expect(grid.undo(), isTrue);
+      expect(grid.lastReplay.isComplete, isTrue);
+      grid.setSearch('');
+      expect(labelsOf(grid), contains('Keyboard'));
+      expect(labelsOf(grid), isNot(contains('Zebra')));
     });
   });
 }

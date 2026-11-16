@@ -94,7 +94,34 @@ class EditHistory<T> {
     _redo.clear();
   }
 
+  /// The next action to undo, without moving it.
+  ///
+  /// Peeking is what lets a caller try to apply an action and only then
+  /// commit the move: [takeUndo] moved the action to the redo stack before
+  /// anyone knew whether it could be applied, so an undo that failed - a row
+  /// that could not be found - consumed the step anyway and the edit became
+  /// permanently unrepeatable.
+  EditAction<T>? peekUndo() => _undo.isEmpty ? null : _undo.last;
+
+  /// The next action to redo, without moving it.
+  EditAction<T>? peekRedo() => _redo.isEmpty ? null : _redo.last;
+
+  /// Moves the action [peekUndo] returned onto the redo stack.
+  void commitUndo() {
+    if (_undo.isEmpty) return;
+    _redo.add(_undo.removeLast());
+  }
+
+  /// Moves the action [peekRedo] returned back onto the undo stack.
+  void commitRedo() {
+    if (_redo.isEmpty) return;
+    _undo.add(_redo.removeLast());
+  }
+
   /// Takes the next action to undo, moving it to the redo stack.
+  ///
+  /// Prefer [peekUndo] with [commitUndo]: this moves the action whether or
+  /// not it can be applied.
   EditAction<T>? takeUndo() {
     if (_undo.isEmpty) return null;
     final action = _undo.removeLast();
@@ -103,6 +130,8 @@ class EditHistory<T> {
   }
 
   /// Takes the next action to redo, moving it back to the undo stack.
+  ///
+  /// Prefer [peekRedo] with [commitRedo].
   EditAction<T>? takeRedo() {
     if (_redo.isEmpty) return null;
     final action = _redo.removeLast();
@@ -114,4 +143,36 @@ class EditHistory<T> {
     _undo.clear();
     _redo.clear();
   }
+}
+
+/// What came of applying one [EditAction].
+///
+/// An undo is not a yes-or-no: the rows an action touched may be on another
+/// page, inside a closed group or filtered out of view, and some of them may
+/// be gone from the data altogether. `undo()` returning a bare bool could
+/// not tell "nothing to undo" from "half of it was undone", which is how a
+/// paste over two rows came to be half taken back with no way to finish the
+/// job.
+class ReplayOutcome {
+  const ReplayOutcome({required this.applied, required this.unresolved});
+
+  const ReplayOutcome.nothing()
+      : applied = 0,
+        unresolved = 0;
+
+  /// Cells written back.
+  final int applied;
+
+  /// Cells whose row could not be found, and which were therefore skipped.
+  final int unresolved;
+
+  /// Whether every cell the action named was written.
+  bool get isComplete => unresolved == 0 && applied > 0;
+
+  /// Whether anything at all was written.
+  bool get didAnything => applied > 0;
+
+  @override
+  String toString() =>
+      'ReplayOutcome($applied applied, $unresolved unresolved)';
 }

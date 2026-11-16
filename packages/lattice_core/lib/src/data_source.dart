@@ -306,6 +306,16 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
   /// materialise a million strings to be told so.
   List<Object?> distinctValuesFor(String field, {int limit = 500}) => const [];
 
+  /// Every row this source holds, or null when it cannot say.
+  ///
+  /// A source that holds its rows locally returns them; one that pages a
+  /// backend returns null, because it has no list to return. The grid uses
+  /// this to find a row it has to write to but is not showing - an undo over
+  /// a row on another page, inside a closed group, or filtered out of view -
+  /// which it previously looked for among the visible rows alone and
+  /// therefore silently skipped.
+  List<T>? get localRows => null;
+
   /// Tells the grid to re-run its current query, e.g. after a write.
   void invalidate() => notifyListeners();
 }
@@ -323,6 +333,9 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   /// The current, unprocessed rows.
   List<T> get rows => List<T>.unmodifiable(_rows);
+
+  @override
+  List<T>? get localRows => _rows;
 
   int get length => _rows.length;
 
