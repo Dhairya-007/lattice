@@ -201,6 +201,7 @@ class GridResult<T> {
     this.aggregates = const AggregateResult.empty(),
     this.filteredCount,
     this.stats = const {},
+    this.sourceIndexOf,
   });
 
   /// The page of data rows, already ordered. Empty when [groups] is used.
@@ -226,6 +227,17 @@ class GridResult<T> {
   /// silently did nothing. A source that returns stats for a column overrides
   /// its own [LatticeDataSource.statsFor] for as long as the result stands.
   final Map<String, ColumnStats> stats;
+
+  /// Where a row sits in the source, before any filtering or ordering.
+  ///
+  /// Supplied by a source that can answer it - one holding its rows locally -
+  /// and read by the grid for [DataGridRow.sourceIndex]. Null from a source
+  /// that pages remotely and cannot know, which reports -1 instead.
+  ///
+  /// A function rather than a list so that a source can build its lookup on
+  /// the first call: a grid that never reads `sourceIndex` must not pay for
+  /// an index over every matching row.
+  final int Function(T row)? sourceIndexOf;
 
   int get matchedCount => filteredCount ?? totalCount;
 

@@ -499,6 +499,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
         totalCount: total,
         filteredCount: matched.length,
         aggregates: aggregates,
+        sourceIndexOf: sourceIndexOf,
       );
     }
 
@@ -512,6 +513,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
         totalCount: total,
         filteredCount: matched.length,
         aggregates: aggregates,
+        sourceIndexOf: sourceIndexOf,
       );
     }
 
@@ -520,7 +522,35 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
       totalCount: total,
       filteredCount: matched.length,
       aggregates: aggregates,
+      sourceIndexOf: sourceIndexOf,
     );
+  }
+
+  // -- Source positions -----------------------------------------------------
+
+  String _positionKey = '';
+  Map<T, int>? _positions;
+
+  /// Where [row] sits in the unordered, unfiltered list.
+  ///
+  /// The grid used to report a row's position in the *sorted* result as its
+  /// source index, which is a different number as soon as anything is sorted,
+  /// and -1 for every grouped or tree row even though the rows were right
+  /// here. The lookup is keyed by identity - two equal rows are two rows -
+  /// and built on the first call per matched set, so a grid that never asks
+  /// pays nothing.
+  int sourceIndexOf(T row) {
+    final key = '$revision\u0000$_matchedKey';
+    var positions = _positions;
+    if (positions == null || _positionKey != key) {
+      positions = Map<T, int>.identity();
+      for (var i = 0; i < _matchedIndices.length; i++) {
+        positions[_matchedRows[i]] = _matchedIndices[i];
+      }
+      _positions = positions;
+      _positionKey = key;
+    }
+    return positions[row] ?? -1;
   }
 
   // -- Stage 1: rows that match the filter and the search -------------------

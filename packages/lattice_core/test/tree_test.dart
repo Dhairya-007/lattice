@@ -73,9 +73,9 @@ void main() {
 
     test('a closed branch hides its whole subtree', () {
       final grid = staffGrid();
-      grid.toggleRow('a\u001fb');
+      grid.toggleRow(grid.treePathFor('b'));
       expect(namesOf(grid), ['Ada', '  Bo', '  Cy', 'Eve']);
-      grid.toggleRow('a');
+      grid.toggleRow(grid.treePathFor('a'));
       expect(namesOf(grid), ['Ada', 'Eve']);
     });
 
@@ -93,7 +93,7 @@ void main() {
 
     test('a branch stays open when the rows are re-sorted', () {
       final grid = staffGrid(expanded: false);
-      grid.setRowExpanded('a', true);
+      grid.setRowExpanded(grid.treePathFor('a'), true);
       expect(namesOf(grid), ['Ada', '  Bo', '  Cy', 'Eve']);
       grid.setSorts([
         const SortSpec('name', direction: SortDirection.descending),
@@ -131,7 +131,7 @@ void main() {
       final grid = staffGrid();
       grid.selectRow(1);
       expect(grid.selectedData.single.name, 'Bo');
-      grid.toggleRow('a\u001fb');
+      grid.toggleRow(grid.treePathFor('b'));
       expect(grid.selectedData.single.name, 'Bo');
     });
 

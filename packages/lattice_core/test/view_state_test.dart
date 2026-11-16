@@ -67,9 +67,10 @@ void main() {
 
     test('remembers which groups were closed, not which existed', () {
       final grid = productGrid(groups: [const GroupSpec('category')]);
-      grid.toggleGroup('Input');
+      final path = groupPathSegment('category', 'Input');
+      grid.toggleGroup(path);
       final state = throughJson(grid.saveState());
-      expect(state.collapsedGroupPaths, ['Input']);
+      expect(state.collapsedGroupPaths, [path]);
 
       final restored = productGrid();
       restored.restoreState(state);

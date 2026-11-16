@@ -773,12 +773,24 @@ class GridController<T> with GridChangeNotifier {
     final key = rowKey;
     final hasDetails =
         details != null && key != null && _openDetails.isNotEmpty;
+    final substitute = _pendingWrites.isEmpty ? null : _substituteWrite;
+    final sourceIndexOf = result.sourceIndexOf;
 
     if (result.isGrouped) {
+      // Pending writes are substituted into the tree before it is flattened.
+      // Doing it only in the flat row lists meant an optimistic edit was
+      // invisible in a grouped or tree grid: the cell showed the old value
+      // until the server answered, which is the whole thing the overlay
+      // exists to prevent.
+      var groups = _mergeLoadedGroups(result.groups);
+      if (substitute != null) {
+        groups = [for (final node in groups) node.mapRows(substitute)];
+      }
       final rows = flattenGroups<T>(
-        _mergeLoadedGroups(result.groups),
+        groups,
         expansion,
         loadingPaths: _loadingGroups,
+        sourceIndexOf: sourceIndexOf,
       );
       return hasDetails
           ? withDetailRows<T>(
@@ -792,12 +804,21 @@ class GridController<T> with GridChangeNotifier {
 
     if (hierarchy != null) {
       final rows = flattenTree<T>(
-        rows: result.rows,
+        rows: substitute == null
+            ? result.rows
+            : [for (final row in result.rows) substitute(row)],
         spec: hierarchy,
         keyOf: rowKey!,
         expansion: treeExpansion,
         loadedChildren: _loadedChildren,
         loadingKeys: _loadingChildren,
+        substitute: substitute,
+        sourceIndexOf: sourceIndexOf,
+        // A nested model's children never reach the data source, so the sort
+        // has to be applied to each level as the tree is flattened.
+        childComparator: _sorts.isEmpty || !hierarchy.isNested
+            ? null
+            : buildComparator<T>(_sorts, columnsByField),
       );
       return hasDetails
           ? withDetailRows<T>(
@@ -809,7 +830,6 @@ class GridController<T> with GridChangeNotifier {
           : rows;
     }
 
-    final substitute = _pendingWrites.isEmpty ? null : _substituteWrite;
     if (!hasDetails) {
       // Lazy: an ungrouped 50k-row grid must not allocate 50k wrappers on
       // every change. See [LazyDataRowList].
@@ -817,6 +837,7 @@ class GridController<T> with GridChangeNotifier {
         result.rows,
         offset: query.offset,
         substitute: substitute,
+        sourceIndexOf: sourceIndexOf,
       );
     }
     // Still lazy with panels open: the positions are resolved arithmetically
@@ -831,6 +852,7 @@ class GridController<T> with GridChangeNotifier {
       keyOf: key,
       offset: query.offset,
       substitute: substitute,
+      sourceIndexOf: sourceIndexOf,
     );
   }
 
@@ -995,11 +1017,9 @@ class GridController<T> with GridChangeNotifier {
     _rebuildRows();
   }
 
+  /// Closes every group, including ones not yet on screen.
   void collapseAllGroups() {
-    final result = _result;
-    expansion.collapseAll(
-      result == null ? const [] : collectGroupPaths<T>(result.groups),
-    );
+    expansion.collapseAll();
     _rebuildRows();
   }
 
@@ -1104,6 +1124,15 @@ class GridController<T> with GridChangeNotifier {
     _reapply();
   }
 
+  /// The [DataGridRow.treePath] of the row with this [rowKey].
+  ///
+  /// A branch is remembered by its own key rather than by the chain of its
+  /// ancestors - repeating the ancestors made the paths grow quadratically
+  /// with depth - and the key is encoded with its type so that `1` and `'1'`
+  /// cannot name the same branch. Use this rather than assembling a path, or
+  /// read [DataGridRow.treePath] from the row itself.
+  String treePathFor(Object key) => pathKeySegment(key);
+
   void expandAllRows() {
     treeExpansion.expandAll();
     _reapply();
@@ -1111,14 +1140,8 @@ class GridController<T> with GridChangeNotifier {
 
   /// Closes every branch, including ones the user has never opened.
   void collapseAllRows() {
-    final hierarchy = tree;
-    final result = _result;
-    if (hierarchy == null || result == null) return;
-    treeExpansion.collapseAll(collectTreePaths<T>(
-      rows: result.rows,
-      spec: hierarchy,
-      keyOf: rowKey!,
-    ));
+    if (tree == null) return;
+    treeExpansion.collapseAll();
     _reapply();
   }
 
@@ -2055,6 +2078,7 @@ class GridController<T> with GridChangeNotifier {
       frozenRowCount: _frozenRowCount,
       frozenRowCountBottom: _frozenRowCountBottom,
       columnFit: columnFit,
+      groupsExpandedByDefault: expansion.expandedByDefault,
     );
   }
 
@@ -2100,7 +2124,10 @@ class GridController<T> with GridChangeNotifier {
     _groups = [
       for (final g in state.groups) resolveGroup == null ? g : resolveGroup(g),
     ];
-    expansion.setOverrides(state.collapsedGroupPaths);
+    expansion.setOverrides(
+      state.collapsedGroupPaths,
+      expandedByDefault: state.groupsExpandedByDefault,
+    );
     _pageSize = state.pageSize;
     _pageIndex = state.pageIndex < 0 ? 0 : state.pageIndex;
     _frozenRowCount = state.frozenRowCount;
@@ -2108,6 +2135,12 @@ class GridController<T> with GridChangeNotifier {
     columnFit = state.columnFit;
     // One query for the whole restore: setting these one at a time would send
     // a request per property.
+    //
+    // The layout notification is part of that one change. Restoring widths,
+    // the column order and pinning is exactly a layout change, and without
+    // saying so an adapter that only relays out on GridChange.layout kept
+    // drawing the geometry the view replaced.
+    notifyListeners(changes: const {GridChange.layout});
     refresh();
   }
 

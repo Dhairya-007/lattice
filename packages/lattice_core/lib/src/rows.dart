@@ -71,8 +71,14 @@ class DataGridRow<T> extends GridRow<T> {
 
   final T data;
 
-  /// Index of [data] in the unsorted, unfiltered source list, or -1 when the
-  /// source cannot provide one (remote paging).
+  /// Index of [data] in the unordered, unfiltered source, or -1 when the
+  /// source cannot say.
+  ///
+  /// A source that holds its rows locally answers this exactly, whatever the
+  /// sort, the filter or the grouping - it used to report the row's position
+  /// in the *sorted* result, which is a different number and was only ever
+  /// right for an unsorted grid. A remote source that pages has no way to
+  /// know, and reports -1.
   final int sourceIndex;
 
   /// This row's place in the hierarchy, or null in a flat or grouped grid.
@@ -173,11 +179,17 @@ class GroupGridRow<T> extends GridRow<T> {
 /// Expansion is keyed by [GroupNode.path] rather than by object identity, so
 /// it survives re-sorting, re-filtering and data reloads.
 class GroupExpansionState {
-  GroupExpansionState({Set<String>? expanded, this.expandedByDefault = true})
-      : _overrides = expanded?.toSet() ?? <String>{};
+  GroupExpansionState({Set<String>? expanded, bool expandedByDefault = true})
+      : _expandedByDefault = expandedByDefault,
+        _overrides = expanded?.toSet() ?? <String>{};
+
+  bool _expandedByDefault;
 
   /// Whether a group not yet touched by the user counts as open.
-  final bool expandedByDefault;
+  ///
+  /// Flipped by [collapseAll] and [expandAll], which is what lets them mean
+  /// "every group" rather than "every group I have seen so far".
+  bool get expandedByDefault => _expandedByDefault;
 
   /// Paths whose state differs from [expandedByDefault].
   final Set<String> _overrides;
@@ -190,7 +202,11 @@ class GroupExpansionState {
   Set<String> get overrides => Set.unmodifiable(_overrides);
 
   /// Replaces the override set, as restoring a saved view does.
-  void setOverrides(Iterable<String> paths) {
+  ///
+  /// [expandedByDefault] restores the mode as well, because "collapse all"
+  /// is recorded as the mode and not as a list of paths.
+  void setOverrides(Iterable<String> paths, {bool? expandedByDefault}) {
+    if (expandedByDefault != null) _expandedByDefault = expandedByDefault;
     _overrides
       ..clear()
       ..addAll(paths);
@@ -211,18 +227,27 @@ class GroupExpansionState {
     }
   }
 
-  /// Opens every group.
-  void expandAll() => _overrides.clear();
+  /// Opens every group, including ones not yet seen.
+  void expandAll() {
+    _expandedByDefault = true;
+    _overrides.clear();
+  }
 
   /// Closes every group, including ones not yet seen.
-  void collapseAll(Iterable<String> knownPaths) {
+  ///
+  /// Enumerating the paths it knew about could only close the groups already
+  /// on screen, so a group that arrived later - a new page, a changed filter,
+  /// a lazily loaded level - opened itself again straight after a
+  /// collapse-all. Flipping the default is the only version of this that
+  /// means what it says.
+  void collapseAll() {
+    _expandedByDefault = false;
     _overrides.clear();
-    if (expandedByDefault) _overrides.addAll(knownPaths);
   }
 
   GroupExpansionState copy() => GroupExpansionState(
         expanded: _overrides,
-        expandedByDefault: expandedByDefault,
+        expandedByDefault: _expandedByDefault,
       );
 }
 
@@ -232,6 +257,7 @@ List<GridRow<T>> flattenGroups<T>(
   List<GroupNode<T>> nodes,
   GroupExpansionState expansion, {
   Set<String> loadingPaths = const {},
+  int Function(T row)? sourceIndexOf,
 }) {
   final out = <GridRow<T>>[];
   void walk(List<GroupNode<T>> level) {
@@ -253,7 +279,7 @@ List<GridRow<T>> flattenGroups<T>(
           out.add(DataGridRow<T>(
             index: out.length,
             data: row,
-            sourceIndex: -1,
+            sourceIndex: sourceIndexOf?.call(row) ?? -1,
             depth: node.depth + 1,
           ));
         }
@@ -278,8 +304,13 @@ List<GridRow<T>> flattenGroups<T>(
 /// equal in content but not identical. Compare [DataGridRow.data] or
 /// [GridRow.index] rather than identity.
 class LazyDataRowList<T> extends ListBase<GridRow<T>> {
-  LazyDataRowList(this._rows, {this.offset = 0, T Function(T row)? substitute})
-      : _substitute = substitute;
+  LazyDataRowList(
+    this._rows, {
+    this.offset = 0,
+    T Function(T row)? substitute,
+    int Function(T row)? sourceIndexOf,
+  })  : _substitute = substitute,
+        _sourceIndexOf = sourceIndexOf;
 
   final List<T> _rows;
 
@@ -292,6 +323,9 @@ class LazyDataRowList<T> extends ListBase<GridRow<T>> {
   /// remote source stays on screen: the substitution happens per read, so a
   /// grid with no pending write pays nothing for it.
   final T Function(T row)? _substitute;
+
+  /// Where a row sits in the source, when the source can say.
+  final int Function(T row)? _sourceIndexOf;
 
   @override
   int get length => _rows.length;
@@ -307,7 +341,7 @@ class LazyDataRowList<T> extends ListBase<GridRow<T>> {
     return DataGridRow<T>(
       index: index,
       data: substitute == null ? row : substitute(row),
-      sourceIndex: offset + index,
+      sourceIndex: _sourceIndexOf?.call(row) ?? offset + index,
     );
   }
 
@@ -378,8 +412,10 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
     required this.keyOf,
     this.offset = 0,
     T Function(T row)? substitute,
+    int Function(T row)? sourceIndexOf,
   })  : _openAt = openAt,
-        _substitute = substitute;
+        _substitute = substitute,
+        _sourceIndexOf = sourceIndexOf;
 
   final List<T> _rows;
 
@@ -390,6 +426,7 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
   final Object Function(T row) keyOf;
   final int offset;
   final T Function(T row)? _substitute;
+  final int Function(T row)? _sourceIndexOf;
 
   @override
   int get length => _rows.length + _openAt.length;
@@ -439,7 +476,7 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
       return DataGridRow<T>(
         index: index,
         data: data,
-        sourceIndex: offset + found,
+        sourceIndex: _sourceIndexOf?.call(raw) ?? offset + found,
       );
     }
     // The only other row at this position is the panel under that row.
@@ -456,7 +493,11 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
       throw UnsupportedError('The grid row list is read-only.');
 }
 
-/// Every group path in a tree, used by [GroupExpansionState.collapseAll].
+/// Every group path in a tree.
+///
+/// [GroupExpansionState.collapseAll] no longer needs it - closing "every
+/// group" cannot be a list of the groups currently on screen - but a caller
+/// that wants to act on the paths it can see still can.
 List<String> collectGroupPaths<T>(List<GroupNode<T>> nodes) {
   final out = <String>[];
   void walk(List<GroupNode<T>> level) {

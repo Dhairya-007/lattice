@@ -324,7 +324,7 @@ void main() {
 
     test('opening a branch fetches it, and says so while it waits', () async {
       final grid = folderGrid();
-      grid.setRowExpanded('root', true);
+      grid.setRowExpanded(grid.treePathFor('root'), true);
       expect(grid.isLoadingChildren('root'), isTrue);
       expect(
         (grid.visibleRows.first as DataGridRow<Folder>).isLoadingChildren,
@@ -341,21 +341,21 @@ void main() {
 
     test('a branch is fetched once, however often it is reopened', () async {
       final grid = folderGrid();
-      grid.setRowExpanded('root', true);
+      grid.setRowExpanded(grid.treePathFor('root'), true);
       await Future<void>.delayed(Duration.zero);
-      grid.setRowExpanded('root', false);
-      grid.setRowExpanded('root', true);
+      grid.setRowExpanded(grid.treePathFor('root'), false);
+      grid.setRowExpanded(grid.treePathFor('root'), true);
       await Future<void>.delayed(Duration.zero);
       expect(loaded, ['root']);
     });
 
     test('a nested branch stays unfetched until it is opened', () async {
       final grid = folderGrid();
-      grid.setRowExpanded('root', true);
+      grid.setRowExpanded(grid.treePathFor('root'), true);
       await Future<void>.delayed(Duration.zero);
       expect(loaded, ['root']);
 
-      grid.setRowExpanded('root\u001froot/b', true);
+      grid.setRowExpanded(grid.treePathFor('root/b'), true);
       await Future<void>.delayed(Duration.zero);
       expect(loaded, ['root', 'root/b']);
       expect(grid.rowCount, 5);
@@ -366,7 +366,7 @@ void main() {
       final grid = folderGrid(
         roots: const [Folder('broken', 'broken', isFolder: true)],
       );
-      grid.setRowExpanded('broken', true);
+      grid.setRowExpanded(grid.treePathFor('broken'), true);
       await Future<void>.delayed(Duration.zero);
       expect(grid.childrenError('broken'), isA<StateError>());
       expect(loaded.length, 1);
