@@ -571,3 +571,145 @@ List<String> collectGroupPaths<T>(List<GroupNode<T>> nodes) {
   walk(nodes);
   return out;
 }
+
+/// A grouped row list that resolves positions arithmetically instead of
+/// materialising every row.
+///
+/// Flattening built a wrapper object per visible row, so opening or closing
+/// one group rebuilt the whole list: 36 ms at 200k rows, three frames, for a
+/// change that affects one subtree. This holds an index over the *groups* -
+/// each one's first visual position and how many rows its subtree shows - and
+/// resolves a read by walking down it. A toggle rebuilds the group index,
+/// which is O(groups), and touches no row at all.
+///
+/// As with [LazyDataRowList], a wrapper is created per read: compare
+/// [GridRow.index] or [DataGridRow.data] rather than identity.
+class GroupedRowList<T> extends ListBase<GridRow<T>> {
+  GroupedRowList(
+    List<GroupNode<T>> nodes,
+    this.expansion, {
+    this.loadingPaths = const {},
+    this.sourceIndexOf,
+    T Function(T row)? substitute,
+  })  : _substitute = substitute,
+        _levels = _indexNodes<T>(nodes, expansion, 0);
+
+  final GroupExpansionState expansion;
+  final Set<String> loadingPaths;
+
+  /// Where a row sits in the source, when the source can say.
+  final int Function(T row)? sourceIndexOf;
+
+  final T Function(T row)? _substitute;
+
+  /// The top level of the group index, in display order.
+  final List<_GroupSlot<T>> _levels;
+
+  @override
+  int get length =>
+      _levels.isEmpty ? 0 : _levels.last.start + _levels.last.total;
+
+  @override
+  set length(int value) =>
+      throw UnsupportedError('The grid row list is read-only.');
+
+  @override
+  GridRow<T> operator [](int index) {
+    if (index < 0 || index >= length) {
+      throw RangeError.index(index, this, 'index', null, length);
+    }
+    var level = _levels;
+    while (true) {
+      final slot = _slotAt(level, index);
+      final node = slot.node;
+      if (index == slot.start) {
+        return GroupGridRow<T>(
+          index: index,
+          depth: node.depth,
+          node: node,
+          expanded: expansion.isExpanded(node.path),
+          loading: loadingPaths.contains(node.path),
+        );
+      }
+      if (slot.children.isEmpty) {
+        // A leaf group: the rows follow its header in order.
+        final row = node.rows[index - slot.start - 1];
+        return DataGridRow<T>(
+          index: index,
+          data: _substitute == null ? row : _substitute(row),
+          sourceIndexOf: sourceIndexOf,
+          depth: node.depth + 1,
+        );
+      }
+      level = slot.children;
+    }
+  }
+
+  @override
+  void operator []=(int index, GridRow<T> value) =>
+      throw UnsupportedError('The grid row list is read-only.');
+
+  /// The slot in [level] whose span covers [index].
+  ///
+  /// The slots are contiguous and ascending, so this is a binary search: a
+  /// grid grouped into thousands of groups must not walk them per read.
+  static _GroupSlot<T> _slotAt<T>(List<_GroupSlot<T>> level, int index) {
+    var low = 0;
+    var high = level.length - 1;
+    while (low < high) {
+      final mid = (low + high + 1) >> 1;
+      if (level[mid].start <= index) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return level[low];
+  }
+
+  static List<_GroupSlot<T>> _indexNodes<T>(
+    List<GroupNode<T>> nodes,
+    GroupExpansionState expansion,
+    int start,
+  ) {
+    final out = <_GroupSlot<T>>[];
+    var cursor = start;
+    for (final node in nodes) {
+      final expanded = expansion.isExpanded(node.path);
+      // A group whose contents have not arrived shows its header alone,
+      // rather than claiming to be empty.
+      final shows = expanded && node.loaded;
+      final children = shows && !node.isLeafGroup
+          ? _indexNodes<T>(node.children, expansion, cursor + 1)
+          : <_GroupSlot<T>>[];
+      final contents = !shows
+          ? 0
+          : (node.isLeafGroup
+              ? node.rows.length
+              : (children.isEmpty
+                  ? 0
+                  : children.last.start + children.last.total - cursor - 1));
+      final total = 1 + contents;
+      out.add(
+          _GroupSlot<T>(node, cursor, total, children.cast<_GroupSlot<T>>()));
+      cursor += total;
+    }
+    return out;
+  }
+}
+
+/// One group's place in a [GroupedRowList]: where its header sits and how
+/// many visual rows its subtree contributes.
+class _GroupSlot<T> {
+  _GroupSlot(this.node, this.start, this.total, this.children);
+
+  final GroupNode<T> node;
+
+  /// Visual index of this group's header.
+  final int start;
+
+  /// Rows this group's subtree shows, its header included.
+  final int total;
+
+  final List<_GroupSlot<T>> children;
+}

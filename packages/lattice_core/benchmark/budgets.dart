@@ -54,10 +54,12 @@ const Map<String, Map<int, double>> benchmarkCeilings = {
   'search, per keystroke while typing': {10000: 4, 50000: 16},
   // local 0.02 / 0.01 · ci 0.01 / 0.01
   'page change, 100 rows a page': {10000: 2, 50000: 2},
-  // local 0.23 / 1.82 · ci 0.69 / 1.55
-  'group by one column, with 3 aggregates': {10000: 2, 50000: 5},
-  // local 0.38 / 4.41 · ci 0.30 / 8.84
-  'toggle a group open and shut': {10000: 2, 50000: 23},
+  // m4 0.06 / 0.05, drawing the window the toggle produced. The grouped row
+  // list resolves positions over an index of the groups, so neither of these
+  // touches a row that is not on screen; they were 1.8 and 4.4 ms at 50k, and
+  // 18 and 45 ms at 200k, when every visible row was built eagerly.
+  'group by one column, with 3 aggregates': {10000: 2, 50000: 2},
+  'toggle a group open and shut': {10000: 2, 50000: 2},
   // local 19.45 / 69.19 · ci 11.38 / 49.77
   'export the whole view to CSV (bulk)': {10000: 50, 50000: 180},
   // local 0.30 / 0.11 · ci 0.31 / 0.12

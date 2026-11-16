@@ -903,20 +903,30 @@ class GridController<T> with GridChangeNotifier {
       if (substitute != null) {
         groups = [for (final node in groups) node.mapRows(substitute)];
       }
+      if (!hasDetails) {
+        // Lazy: a toggle rebuilds an index over the groups, not a wrapper per
+        // visible row. See [GroupedRowList].
+        return GroupedRowList<T>(
+          groups,
+          expansion,
+          loadingPaths: _loadingGroups,
+          sourceIndexOf: sourceIndexOf,
+        );
+      }
+      // Detail panels are interleaved into a materialised list; a grid with
+      // panels open is a grid with few enough rows for that to be fine.
       final rows = flattenGroups<T>(
         groups,
         expansion,
         loadingPaths: _loadingGroups,
         sourceIndexOf: sourceIndexOf,
       );
-      return hasDetails
-          ? withDetailRows<T>(
-              rows,
-              open: _openDetails,
-              height: details,
-              keyOf: key,
-            )
-          : rows;
+      return withDetailRows<T>(
+        rows,
+        open: _openDetails,
+        height: details,
+        keyOf: key,
+      );
     }
 
     if (hierarchy != null) {

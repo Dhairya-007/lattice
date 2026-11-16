@@ -21,6 +21,7 @@ export 'src/group.dart' show buildGroups;
 export 'src/rows.dart'
     show
         DetailRowList,
+        GroupedRowList,
         LazyDataRowList,
         RowSlice,
         collectGroupPaths,

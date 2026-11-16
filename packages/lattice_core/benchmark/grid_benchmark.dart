@@ -292,6 +292,16 @@ void main(List<String> args) {
         10;
   });
 
+  /// Reads the rows an adapter would draw, so that a measurement cannot be
+  /// flattered by work the row list defers until it is indexed.
+  void drawWindow(GridController<LogEntry> grid) {
+    final rows = grid.visibleRows;
+    final end = rows.length < 40 ? rows.length : 40;
+    for (var i = 0; i < end; i++) {
+      rows[i];
+    }
+  }
+
   record('group by one column, with 3 aggregates', (size) {
     final grid = grids[size]!;
     grid.setPageSize(null);
@@ -304,6 +314,7 @@ void main(List<String> args) {
         grid.clearGroups();
       }
       on = !on;
+      drawWindow(grid);
     });
   });
 
@@ -313,7 +324,9 @@ void main(List<String> args) {
     final path = (grid.visibleRows.first as GroupGridRow<LogEntry>).path;
     return measure(() {
       grid.toggleGroup(path);
+      drawWindow(grid);
       grid.toggleGroup(path);
+      drawWindow(grid);
     });
   });
 

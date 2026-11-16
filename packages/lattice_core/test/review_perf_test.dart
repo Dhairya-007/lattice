@@ -9,6 +9,8 @@ import 'package:test/test.dart';
 import 'fixtures.dart';
 
 void main() {
+  groupedRowListTests();
+
   group('select-all', () {
     test('is a flag, not a set of every index', () {
       final selection = SelectionState();
@@ -105,6 +107,103 @@ void main() {
       expect(grid.columnsByField, isNot(same(first)));
       expect(grid.column('price')!.visible, isFalse);
       grid.dispose();
+    });
+  });
+}
+
+/// The lazy grouped row list, which is what makes a group toggle O(groups).
+void groupedRowListTests() {
+  group('GroupedRowList', () {
+    final columns = {
+      'cat': GridColumn<Map<String, Object?>>(field: 'cat'),
+      'sub': GridColumn<Map<String, Object?>>(field: 'sub'),
+    };
+    List<Map<String, Object?>> rows() => [
+          for (var i = 0; i < 20; i++)
+            {'cat': 'c${i % 2}', 'sub': 's${i % 4}', 'id': i},
+        ];
+
+    test('reads the same rows the eager flattening produces', () {
+      for (final specs in [
+        [const GroupSpec('cat')],
+        [const GroupSpec('cat'), const GroupSpec('sub')],
+      ]) {
+        final nodes = buildGroups(rows(), specs, columns);
+        for (final collapsed in [false, true]) {
+          final expansion = GroupExpansionState();
+          if (collapsed) expansion.setExpanded(nodes.first.path, false);
+          final eager = flattenGroups(nodes, expansion);
+          final lazy = GroupedRowList(nodes, expansion);
+          expect(lazy.length, eager.length);
+          for (var i = 0; i < eager.length; i++) {
+            final a = eager[i];
+            final b = lazy[i];
+            expect(b.index, a.index);
+            expect(b.depth, a.depth);
+            expect(b.runtimeType, a.runtimeType);
+            if (a is GroupGridRow<Map<String, Object?>>) {
+              expect(
+                (b as GroupGridRow<Map<String, Object?>>).path,
+                a.path,
+              );
+              expect(b.expanded, a.expanded);
+            } else if (a is DataGridRow<Map<String, Object?>>) {
+              expect(
+                (b as DataGridRow<Map<String, Object?>>).data['id'],
+                a.data['id'],
+              );
+            }
+          }
+        }
+      }
+    });
+
+    test('shows a header alone while its contents are in flight', () {
+      final node = GroupNode<Map<String, Object?>>(
+        field: 'cat',
+        key: 'c0',
+        label: 'c0',
+        depth: 0,
+        path: 'cat=s:c0',
+        declaredCount: 9,
+        loaded: false,
+      );
+      final list = GroupedRowList(
+        [node],
+        GroupExpansionState(),
+        loadingPaths: {node.path},
+      );
+      expect(list, hasLength(1));
+      expect(
+        (list.first as GroupGridRow<Map<String, Object?>>).loading,
+        isTrue,
+      );
+    });
+
+    test('refuses a read past its end', () {
+      final nodes = buildGroups(rows(), [const GroupSpec('cat')], columns);
+      final list = GroupedRowList(nodes, GroupExpansionState());
+      expect(() => list[list.length], throwsRangeError);
+      expect(() => list[-1], throwsRangeError);
+    });
+
+    test('a toggle does not touch the rows it is not showing', () {
+      var reads = 0;
+      final watched = {
+        'cat': GridColumn<Map<String, Object?>>(
+          field: 'cat',
+          value: (r) {
+            reads++;
+            return r['cat'];
+          },
+        ),
+      };
+      final nodes = buildGroups(rows(), [const GroupSpec('cat')], watched);
+      final expansion = GroupExpansionState();
+      reads = 0;
+      final list = GroupedRowList(nodes, expansion);
+      expect(list.length, 22);
+      expect(reads, 0, reason: 'building the index reads no values');
     });
   });
 }
