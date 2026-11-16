@@ -1,7 +1,20 @@
 # lattice_core
 
-The data grid engine behind [Lattice](https://github.com/Dhairya-007/lattice),
-in pure Dart. No Flutter dependency, no UI toolkit of any kind.
+[![pub package](https://img.shields.io/pub/v/lattice_core.svg?color=0175C2)](https://pub.dev/packages/lattice_core)
+[![pub points](https://img.shields.io/pub/points/lattice_core?label=pub%20points)](https://pub.dev/packages/lattice_core/score)
+[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+
+The **data grid engine** behind
+[Lattice](https://github.com/Dhairya-007/lattice), in pure Dart. No Flutter
+dependency, no UI toolkit of any kind.
+
+If you are looking for a data table with multi-column sorting, a filter row,
+grouping with subtotals, tree rows, virtual scrolling over tens of thousands
+of rows, row and range selection, inline editing with undo, CSV export and
+saved views - that behaviour is all here, and it is MIT licensed with no paid
+tier. To draw it in Flutter, add
+[`lattice_flutter`](https://pub.dev/packages/lattice_flutter); to draw it
+anywhere else, write an adapter over this.
 
 Everything a data grid does other than paint lives here:
 

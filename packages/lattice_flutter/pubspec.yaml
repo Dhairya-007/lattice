@@ -1,5 +1,8 @@
 name: lattice_flutter
-description: Open source Flutter data grid - frozen columns, virtualized rows, multi-column sorting, filtering, grouping with aggregates, range selection and inline editing.
+description: >-
+  Open source Flutter data grid and data table: frozen columns, virtualized
+  rows, multi-column sorting, filtering, search, grouping with aggregates,
+  tree rows, range selection, inline editing, CSV export and paging.
 version: 0.1.0
 homepage: https://github.com/Dhairya-007/lattice
 repository: https://github.com/Dhairya-007/lattice
@@ -23,6 +26,7 @@ topics:
   - table
   - data-table
   - widgets
+  - spreadsheet
 
 environment:
   sdk: ^3.8.0
