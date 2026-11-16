@@ -91,9 +91,32 @@ class CellRange {
   }
 
   bool contains(CellAddress cell) {
+    if (firstColumn < 0) return false;
     if (cell.row < firstRow || cell.row > lastRow) return false;
     final column = fields.indexOf(cell.field);
+    // A field that is no longer on screen is in no range. Without the first
+    // test, a range whose own anchor column had disappeared reported -1 as
+    // its first column and then claimed to contain every missing field,
+    // which disagreed with coveredFields - and a copy walked cells the range
+    // said it did not cover.
+    if (column < 0) return false;
     return column >= firstColumn && column <= lastColumn;
+  }
+
+  /// This range with both ends pulled inside [rowCount], or null when it has
+  /// no rows left.
+  CellRange? clampedTo(int rowCount) {
+    if (rowCount <= 0) return null;
+    if (lastRow < rowCount) return this;
+    final last = rowCount - 1;
+    return CellRange(
+      anchor: CellAddress(
+        anchor.row > last ? last : anchor.row,
+        anchor.field,
+      ),
+      focus: CellAddress(focus.row > last ? last : focus.row, focus.field),
+      fields: fields,
+    );
   }
 
   /// Every cell in the range, row-major - the order a clipboard copy needs.
@@ -295,13 +318,27 @@ class SelectionState {
 
   /// Keeps the selection meaningful after the row count changes, dropping
   /// indices that no longer exist.
+  ///
+  /// Every part of the selection is clamped, not only the active cell: a
+  /// range over rows 0..5 of a grid that now has two rows went on reporting
+  /// `lastRow` 5, and a copy of it emitted rows that are not there.
   void clampTo(int rowCount) {
     _rows.removeWhere((i) => i >= rowCount);
-    final active = _activeCell;
-    if (active != null && active.row >= rowCount) {
-      _activeCell =
-          rowCount == 0 ? null : CellAddress(rowCount - 1, active.field);
+    if (rowCount <= 0) {
+      _activeCell = null;
+      _anchor = null;
       _range = null;
+      return;
     }
+    final last = rowCount - 1;
+    final active = _activeCell;
+    if (active != null && active.row > last) {
+      _activeCell = CellAddress(last, active.field);
+    }
+    final anchor = _anchor;
+    if (anchor != null && anchor.row > last) {
+      _anchor = CellAddress(last, anchor.field);
+    }
+    _range = _range?.clampedTo(rowCount);
   }
 }

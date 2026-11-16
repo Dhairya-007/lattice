@@ -455,6 +455,12 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
 
   @override
   GridRow<T> operator [](int index) {
+    // An out-of-range read is an error, not a row: returning the last row's
+    // phantom panel for index 10 of a 3-row list hid the caller's bug and
+    // put a row on screen that does not exist.
+    if (index < 0 || index >= length) {
+      throw RangeError.index(index, this, 'index', null, length);
+    }
     // The largest data index whose row starts at or before [index]. The
     // mapping is monotonic, so this is a binary search.
     var low = 0;

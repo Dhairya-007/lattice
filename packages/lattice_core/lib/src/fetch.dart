@@ -79,12 +79,26 @@ class FetchSignal {
     _reason = reason;
     final listeners = _listeners;
     _listeners = null;
+    // One listener that throws must not keep the others from hearing about
+    // the cancellation - a socket left open because the listener before it
+    // failed is exactly the leak this class exists to prevent. The first
+    // error is rethrown afterwards.
+    Object? firstError;
+    StackTrace? firstStack;
     if (listeners != null) {
       for (final listener in listeners) {
-        listener();
+        try {
+          listener();
+        } catch (error, stack) {
+          firstError ??= error;
+          firstStack ??= stack;
+        }
       }
     }
     final completer = _completer;
     if (completer != null && !completer.isCompleted) completer.complete();
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError, firstStack ?? StackTrace.current);
+    }
   }
 }

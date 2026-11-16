@@ -73,10 +73,40 @@ class GridController<T> with GridChangeNotifier {
       'A tree needs a rowKey: a branch is remembered by the identity of the '
       'rows above it.',
     );
+    assert(_noDuplicateFields(_columns));
+    assert(() {
+      // The setter validates; the constructor used not to, so a grid built
+      // with a broken band only reported it if someone assigned the bands
+      // again later.
+      final problems = describeHeaderProblems<T>(_stackedHeaders, _columns);
+      if (problems.isNotEmpty) {
+        throw StateError('Stacked headers:\n  ${problems.join('\n  ')}');
+      }
+      return true;
+    }());
     _dataSource.columns = columnsByField;
     _dataSource.addListener(_onSourceChanged);
     if (isInfinite) _loadedCount = loadMoreSize!;
     refresh();
+  }
+
+  /// Whether every column names a different field.
+  ///
+  /// Two columns with one field is not a layout choice: `columnsByField`
+  /// keeps one of them, so the other silently loses its filters, its sort and
+  /// its editing. Accepting it quietly was the bug.
+  static bool _noDuplicateFields<T>(List<GridColumn<T>> columns) {
+    final seen = <String>{};
+    final duplicates = <String>{};
+    for (final column in columns) {
+      if (!seen.add(column.field)) duplicates.add(column.field);
+    }
+    if (duplicates.isEmpty) return true;
+    throw ArgumentError(
+      'Two columns cannot share a field: ${duplicates.join(', ')}. '
+      'A field is a column\'s identity - its filters, its sort and its '
+      'saved width are all keyed on it.',
+    );
   }
 
   List<GridColumn<T>> _columns;
@@ -267,6 +297,26 @@ class GridController<T> with GridChangeNotifier {
   Filter? get filter => _filter;
   Map<String, FilterCondition> get columnFilters =>
       Map.unmodifiable(_columnFilters);
+
+  /// Fields that something in the current state refers to and the grid has no
+  /// column for.
+  ///
+  /// Those filters, sorts and groupings are kept but left out of the query,
+  /// so an adapter can offer to clear them - the header they belonged to is
+  /// gone, so the user cannot.
+  Set<String> get inactiveFields {
+    final known = columnsByField;
+    return {
+      for (final field in {
+        ...?_filter?.fields,
+        ..._columnFilters.keys,
+        for (final s in _sorts) s.field,
+        for (final g in _groups) g.field,
+      })
+        if (!known.containsKey(field)) field,
+    };
+  }
+
   String get search => _search;
 
   /// The rows to render, group headers included.
@@ -348,14 +398,24 @@ class GridController<T> with GridChangeNotifier {
 
   /// The query the current state describes.
   GridQuery get query {
+    final known = columnsByField;
+    bool isKnown(String field) => known.containsKey(field);
     final conditions = <Filter>[
-      if (_filter != null) _filter!,
+      // A filter on a column that is no longer here would test a field no
+      // row answers to, which hides every row - and with the header gone
+      // there is nothing left to clear it from. The condition is kept in
+      // state and left out of the query, so putting the column back brings
+      // its filter back too.
+      if (pruneFilter(_filter, isKnown) case final pruned?) pruned,
       for (final condition in _columnFilters.values)
-        if (!condition.isEmpty) condition,
+        if (!condition.isEmpty && isKnown(condition.field)) condition,
     ];
     final size = _pageSize;
     return GridQuery(
-      sorts: _sorts,
+      sorts: [
+        for (final sort in _sorts)
+          if (isKnown(sort.field)) sort,
+      ],
       filter: conditions.isEmpty
           ? null
           : (conditions.length == 1
@@ -366,7 +426,10 @@ class GridController<T> with GridChangeNotifier {
         for (final c in visibleColumns)
           if (c.filterable) c.field,
       ],
-      groups: _groups,
+      groups: [
+        for (final group in _groups)
+          if (isKnown(group.field)) group,
+      ],
       aggregations: _aggregations,
       // Infinite mode always asks from the top for everything loaded so far,
       // so a re-sort or a new filter rebuilds the accumulated list rather
@@ -882,7 +945,14 @@ class GridController<T> with GridChangeNotifier {
     for (final index in indices) {
       if (index < 0 || index >= _visibleRows.length) continue;
       final row = _visibleRows[index];
-      if (row is DataGridRow<T>) out[index] = key(row.data);
+      if (row is DataGridRow<T>) {
+        out[index] = key(row.data);
+      } else if (row is GroupGridRow<T>) {
+        // A header has an identity too - its path - and keeping its raw
+        // index meant collapsing a group above it slid the selection onto a
+        // different group's header.
+        out[index] = _HeaderIdentity(row.path);
+      }
     }
     return out.isEmpty ? null : out;
   }
@@ -896,7 +966,11 @@ class GridController<T> with GridChangeNotifier {
       final row = _visibleRows[i];
       // First occurrence wins, so a duplicated key degrades to the topmost
       // row rather than to an arbitrary one.
-      if (row is DataGridRow<T>) out.putIfAbsent(key(row.data), () => i);
+      if (row is DataGridRow<T>) {
+        out.putIfAbsent(key(row.data), () => i);
+      } else if (row is GroupGridRow<T>) {
+        out.putIfAbsent(_HeaderIdentity(row.path), () => i);
+      }
     }
     return out;
   }
@@ -1148,6 +1222,7 @@ class GridController<T> with GridChangeNotifier {
   // -- Columns --------------------------------------------------------------
 
   void setColumns(List<GridColumn<T>> columns) {
+    assert(_noDuplicateFields(columns));
     _columns = List<GridColumn<T>>.of(columns);
     _dataSource.columns = columnsByField;
     // New columns change the geometry as well as the rows, and the batch
@@ -1270,11 +1345,36 @@ class GridController<T> with GridChangeNotifier {
   }
 
   /// Moves a column to a new position in display order.
+  /// Moves [field] to [newIndex] in *display* order.
+  ///
+  /// Display order is what the user drags in, and it is not the declaration
+  /// order: a hidden column takes a slot in the list and none on screen, so
+  /// moving to index 2 used to land at display position 1 whenever a hidden
+  /// column sat before it.
+  ///
+  /// Pinning still wins: a pinned band is drawn as a band whatever the
+  /// declaration order says, so a column cannot be dragged out of its band
+  /// without being unpinned first. Within a band this is exact.
   void moveColumn(String field, int newIndex) {
     final from = _columns.indexWhere((c) => c.field == field);
     if (from < 0) return;
-    final column = _columns.removeAt(from);
-    _columns.insert(newIndex.clamp(0, _columns.length), column);
+    final moved = _columns[from];
+    final rest = [
+      for (final column in visibleColumns)
+        if (column.field != field) column.field,
+    ];
+    final target =
+        newIndex < 0 ? 0 : (newIndex > rest.length ? rest.length : newIndex);
+    _columns.removeAt(from);
+    final int insertAt;
+    if (rest.isEmpty) {
+      insertAt = from > _columns.length ? _columns.length : from;
+    } else if (target >= rest.length) {
+      insertAt = _columns.indexWhere((c) => c.field == rest.last) + 1;
+    } else {
+      insertAt = _columns.indexWhere((c) => c.field == rest[target]);
+    }
+    _columns.insert(insertAt < 0 ? _columns.length : insertAt, moved);
     notifyListeners(changes: const {GridChange.layout});
   }
 
@@ -1448,6 +1548,10 @@ class GridController<T> with GridChangeNotifier {
     bool backwards = false,
     bool wrap = true,
   }) {
+    // A column with a setter is only editable if the source can save it -
+    // the same door beginEdit refuses at. Walking into cells that cannot be
+    // edited gave the user a tab order to nowhere.
+    if (!canEdit) return null;
     final fields = [
       for (final column in visibleColumns)
         if (column.editable) column.field,
@@ -2345,6 +2449,24 @@ class GridController<T> with GridChangeNotifier {
     _dataSource.removeListener(_onSourceChanged);
     super.dispose();
   }
+}
+
+/// A group header's identity, so the selection can follow it the way it
+/// follows a data row.
+///
+/// A value type rather than the bare path string, so that a header can never
+/// be confused with a row whose key happens to be the same string.
+class _HeaderIdentity {
+  const _HeaderIdentity(this.path);
+
+  final String path;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _HeaderIdentity && other.path == path;
+
+  @override
+  int get hashCode => Object.hash('header', path);
 }
 
 /// One row written and not yet confirmed, and the write that owns it.

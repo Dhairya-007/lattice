@@ -35,7 +35,8 @@ class _Backend extends LatticeDataSource<Product> {
   }
 }
 
-GridController<Product> _remoteGrid(_Backend backend) => GridController<Product>(
+GridController<Product> _remoteGrid(_Backend backend) =>
+    GridController<Product>(
       columns: productColumns(),
       dataSource: backend,
       rowKey: (p) => p.id,

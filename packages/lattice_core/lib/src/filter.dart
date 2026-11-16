@@ -858,3 +858,28 @@ Object? decodeFilterOperand(Object? operand) {
   }
   return operand;
 }
+
+/// Drops the conditions in [filter] whose field [isKnown] rejects.
+///
+/// A filter on a column that has been removed tests a field no row has a
+/// value for, which hides every row - and with the header gone there is no
+/// menu left to clear it from. The grid prunes the filter it sends rather
+/// than forgetting what the user set, so putting the column back brings its
+/// filter back with it.
+///
+/// Returns null when nothing is left to test.
+Filter? pruneFilter(Filter? filter, bool Function(String field) isKnown) {
+  if (filter == null) return null;
+  switch (filter) {
+    case FilterCondition():
+      return isKnown(filter.field) ? filter : null;
+    case FilterGroup():
+      final kept = <Filter>[
+        for (final child in filter.children)
+          if (pruneFilter(child, isKnown) case final pruned?) pruned,
+      ];
+      if (kept.isEmpty) return null;
+      if (kept.length == 1 && filter.join == FilterJoin.and) return kept.first;
+      return FilterGroup(kept, join: filter.join);
+  }
+}
