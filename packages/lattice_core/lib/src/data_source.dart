@@ -359,9 +359,15 @@ class DistinctValues {
 /// Serves rows from a list already in memory.
 ///
 /// Runs the whole pipeline locally - filter, search, sort, group, aggregate,
-/// page - and is the source used by the vast majority of grids. For ~100k
-/// rows this stays comfortably inside a frame budget; past that, prefer a
-/// source that pushes the work into a database.
+/// page - and is the source used by the vast majority of grids.
+///
+/// Up to around 20k rows every operation stays inside a 16.7 ms frame on a
+/// desktop machine. Between there and 100k, sorting and a whole-table search
+/// cross it: a three-column sort of 50k rows takes about 60 ms, which reads
+/// as a stall rather than a dropped frame. Past 100k, prefer a source that
+/// pushes the work into a database. `benchmark/grid_benchmark.dart` measures
+/// all of it, and `benchmark/budgets.dart` records what each operation is
+/// allowed to cost.
 class InMemoryDataSource<T> extends LatticeDataSource<T> {
   InMemoryDataSource(List<T> rows) : _rows = List<T>.of(rows);
 
@@ -578,7 +584,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   // -- Source positions -----------------------------------------------------
 
-  String _positionKey = '';
+  int _positionGeneration = -1;
   Map<T, int>? _positions;
 
   /// Where [row] sits in the unordered, unfiltered list.
@@ -590,15 +596,14 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   /// and built on the first call per matched set, so a grid that never asks
   /// pays nothing.
   int sourceIndexOf(T row) {
-    final key = '$revision\u0000$_matchedKey';
     var positions = _positions;
-    if (positions == null || _positionKey != key) {
+    if (positions == null || _positionGeneration != _matchedGeneration) {
       positions = Map<T, int>.identity();
       for (var i = 0; i < _matchedIndices.length; i++) {
         positions[_matchedRows[i]] = _matchedIndices[i];
       }
       _positions = positions;
-      _positionKey = key;
+      _positionGeneration = _matchedGeneration;
     }
     return positions[row] ?? -1;
   }
@@ -607,6 +612,14 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   int _matchedRevision = -1;
   String _matchedKey = '';
+
+  /// Bumped whenever the matched set is recomputed.
+  ///
+  /// The stats and distinct-value caches key on this instead of on
+  /// `'$revision\u0000$_matchedKey'`: building that string per call cost real
+  /// time on the conditional-formatting path, which asks for a column's stats
+  /// once per visible cell.
+  int _matchedGeneration = 0;
   String _matchedFilterKey = '';
   String _matchedNeedle = '';
   List<int> _matchedIndices = const [];
@@ -672,6 +685,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
     _matchedRevision = revision;
     _matchedKey = key;
+    _matchedGeneration++;
     _matchedFilterKey = filterKey;
     _matchedNeedle = needle;
     _matchedIndices = indices;
@@ -681,7 +695,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   // -- Column statistics ----------------------------------------------------
 
-  String _statsKey = '';
+  int _statsGeneration = -1;
   final Map<String, ColumnStats> _stats = {};
 
   /// Range of [field] across the rows that currently match.
@@ -691,10 +705,9 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   /// per matched set, because a bar must not cost a column scan per frame.
   @override
   ColumnStats statsFor(String field) {
-    final key = '$revision\u0000$_matchedKey';
-    if (_statsKey != key) {
+    if (_statsGeneration != _matchedGeneration) {
       _stats.clear();
-      _statsKey = key;
+      _statsGeneration = _matchedGeneration;
     }
     final cached = _stats[field];
     if (cached != null) return cached;
@@ -708,7 +721,9 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     return stats;
   }
 
-  String _distinctKey = '';
+  int _distinctGeneration = -1;
+  int _distinctLimit = -1;
+  String _distinctScope = '';
   final Map<String, DistinctValues> _distinct = {};
 
   /// The last query this source resolved, so a distinct-value list knows
@@ -731,10 +746,14 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   /// one on offer.
   @override
   DistinctValues distinctValuesFor(String field, {int limit = 500}) {
-    final key = '$revision\u0000$_distinctScopeKey\u0000$limit';
-    if (_distinctKey != key) {
+    final scope = _distinctScopeKey;
+    if (_distinctGeneration != _matchedGeneration ||
+        _distinctLimit != limit ||
+        _distinctScope != scope) {
       _distinct.clear();
-      _distinctKey = key;
+      _distinctGeneration = _matchedGeneration;
+      _distinctLimit = limit;
+      _distinctScope = scope;
     }
     final cached = _distinct[field];
     if (cached != null) return cached;

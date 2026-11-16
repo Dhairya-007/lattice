@@ -14,6 +14,10 @@ class SliceBackend extends LatticeDataSource<Product> {
 
   final List<Product> rows;
   final List<int> requestedLimits = [];
+
+  /// Offsets asked for, which is what makes a load-more a slice rather than
+  /// a re-download of everything so far.
+  final List<int> requestedOffsets = [];
   bool _more = true;
 
   @override
@@ -22,11 +26,13 @@ class SliceBackend extends LatticeDataSource<Product> {
   @override
   Future<GridResult<Product>> fetch(GridQuery query) async {
     requestedLimits.add(query.limit ?? -1);
+    requestedOffsets.add(query.offset);
+    final start = query.offset > rows.length ? rows.length : query.offset;
     final limit = query.limit ?? rows.length;
-    final end = limit > rows.length ? rows.length : limit;
+    final end = start + limit > rows.length ? rows.length : start + limit;
     _more = end < rows.length;
     return GridResult<Product>(
-      rows: rows.sublist(0, end),
+      rows: rows.sublist(start, end),
       totalCount: rows.length,
     );
   }
@@ -77,6 +83,15 @@ void main() {
       await grid.loadMore();
       expect(grid.rowCount, 25);
       expect(grid.canLoadMore, isFalse, reason: 'the source said that is all');
+      // One slice per request, from where the last one ended: asking from the
+      // top each time transferred 55 rows to show 25.
+      expect(backend.requestedOffsets, [0, 10, 20]);
+      expect(backend.requestedLimits, [10, 10, 10]);
+      expect(
+        backend.rows.length,
+        25,
+        reason: 'and the whole table was never sent',
+      );
     });
 
     test('a second request while one is in flight is dropped', () async {

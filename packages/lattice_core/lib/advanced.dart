@@ -22,6 +22,7 @@ export 'src/rows.dart'
     show
         DetailRowList,
         LazyDataRowList,
+        RowSlice,
         collectGroupPaths,
         flattenGroups,
         withDetailRows;

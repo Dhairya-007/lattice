@@ -86,7 +86,6 @@ class GridController<T> with GridChangeNotifier {
     }());
     _dataSource.columns = columnsByField;
     _dataSource.addListener(_onSourceChanged);
-    if (isInfinite) _loadedCount = loadMoreSize!;
     refresh();
   }
 
@@ -277,11 +276,22 @@ class GridController<T> with GridChangeNotifier {
   /// all read this, which is what keeps them agreeing with the screen.
   List<GridColumn<T>> get visibleColumns => orderColumnsForDisplay<T>(_columns);
 
-  Map<String, GridColumn<T>> get columnsByField =>
-      {for (final c in _columns) c.field: c};
+  Map<String, GridColumn<T>>? _byField;
 
-  GridColumn<T>? column(String field) =>
-      _columns.where((c) => c.field == field).firstOrNull;
+  /// The columns by field.
+  ///
+  /// Cached, because this is read on paths that run per cell: conditional
+  /// formatting over a 40x200 viewport asked for a column 8,000 times a
+  /// frame, and both this and [column] walked or rebuilt the whole list every
+  /// time - 13.5ms of a 16.7ms frame. The cache is dropped whenever the
+  /// columns change.
+  Map<String, GridColumn<T>> get columnsByField =>
+      _byField ??= {for (final c in _columns) c.field: c};
+
+  GridColumn<T>? column(String field) => columnsByField[field];
+
+  /// Drops the by-field cache. Called by everything that changes [_columns].
+  void _columnsChanged() => _byField = null;
 
   LatticeDataSource<T> get dataSource => _dataSource;
 
@@ -431,16 +441,19 @@ class GridController<T> with GridChangeNotifier {
           if (isKnown(group.field)) group,
       ],
       aggregations: _aggregations,
-      // Infinite mode always asks from the top for everything loaded so far,
-      // so a re-sort or a new filter rebuilds the accumulated list rather
-      // than leaving slices that were ordered under the old query.
-      offset: isInfinite || size == null || size <= 0 || isGrouped
-          ? 0
-          : _pageIndex * size,
+      // Infinite mode asks for one slice at a time, from where the last one
+      // ended. It used to ask from the top for everything loaded so far, so
+      // ten slices of 100 transferred 5,500 rows to show 1,000 - O(n^2)
+      // against a remote API, and the whole list re-sorted on every scroll.
+      // A query change starts again from the top, because a slice fetched
+      // under the old order describes rows that are no longer there.
+      offset: isInfinite
+          ? (_appending ? _loadedRows.length : 0)
+          : (size == null || size <= 0 || isGrouped ? 0 : _pageIndex * size),
       limit: isGrouped
           ? null
           : (isInfinite
-              ? _loadedCount
+              ? loadMoreSize
               : (size != null && size > 0 ? size : null)),
       lazyGroups: isLazilyGrouped,
     );
@@ -504,10 +517,20 @@ class GridController<T> with GridChangeNotifier {
 
   // -- Loading more ---------------------------------------------------------
 
-  /// How many rows the current query asks for in infinite mode: one slice to
-  /// begin with, and one more per [loadMore].
-  int _loadedCount = 0;
+  /// Rows gathered so far in infinite mode, slice by slice.
+  List<T> _loadedRows = const [];
+
+  /// Whether the fetch being built is appending a slice rather than starting
+  /// the list again.
+  bool _appending = false;
+
+  /// Whether the source has said there is nothing left.
+  bool _exhausted = false;
+
   bool _loadingMore = false;
+
+  /// How many rows have been gathered in infinite mode.
+  int get loadedRowCount => _loadedRows.length;
 
   /// Whether a [loadMore] is in flight, for a spinner at the tail.
   bool get isLoadingMore => _loadingMore;
@@ -517,12 +540,12 @@ class GridController<T> with GridChangeNotifier {
   /// False while one request is already out, so a scroll that reaches the end
   /// twice in two frames asks once.
   bool get canLoadMore {
-    if (!isInfinite || isGrouped || _loadingMore) return false;
+    if (!isInfinite || isGrouped || _loadingMore || _exhausted) return false;
     final capabilities = _dataSource.capabilities;
     if (!capabilities.supportsLoadMore) return false;
     // A local source knows its own total; a remote one answers for itself.
-    if (capabilities.isLocal) return _loadedCount < matchedCount;
-    return _dataSource.hasMore || _loadedCount < matchedCount;
+    if (capabilities.isLocal) return _loadedRows.length < matchedCount;
+    return _dataSource.hasMore || _loadedRows.length < matchedCount;
   }
 
   /// Appends another slice of rows.
@@ -533,11 +556,12 @@ class GridController<T> with GridChangeNotifier {
   Future<void> loadMore() async {
     if (!canLoadMore) return;
     _loadingMore = true;
-    _loadedCount += loadMoreSize!;
+    _appending = true;
     notifyListeners(changes: const {GridChange.status});
     try {
       await _fetch();
     } finally {
+      _appending = false;
       _loadingMore = false;
       if (!isDisposed) {
         notifyListeners(changes: const {GridChange.status});
@@ -553,7 +577,10 @@ class GridController<T> with GridChangeNotifier {
   /// longer in those positions.
   void _resetPaging() {
     _pageIndex = 0;
-    if (isInfinite) _loadedCount = loadMoreSize!;
+    if (isInfinite) {
+      _loadedRows = const [];
+      _exhausted = false;
+    }
   }
 
   /// Drops back to the first slice, as a pull-to-refresh does.
@@ -561,7 +588,10 @@ class GridController<T> with GridChangeNotifier {
   /// The gesture belongs to the adapter; what it means - forget what was
   /// accumulated and ask again - belongs here.
   Future<void> reload() {
-    if (isInfinite) _loadedCount = loadMoreSize!;
+    if (isInfinite) {
+      _loadedRows = const [];
+      _exhausted = false;
+    }
     // Everything fetched a piece at a time is refetched too, keeping which
     // branches and groups are open: reload used to leave a lazy tree showing
     // the children it had already loaded, whatever the server now held.
@@ -639,6 +669,29 @@ class GridController<T> with GridChangeNotifier {
   /// Guards the re-slice in [_apply] against recursion.
   bool _reslicing = false;
 
+  /// Folds an incoming slice into the rows gathered so far.
+  ///
+  /// A slice shorter than asked for means the source has run out, which is
+  /// how a backend that cannot report a total says "that is all".
+  GridResult<T> _accumulate(GridResult<T> incoming) {
+    final slice = loadMoreSize!;
+    if (_appending) {
+      _loadedRows = [..._loadedRows, ...incoming.rows];
+    } else {
+      _loadedRows = incoming.rows;
+    }
+    if (incoming.rows.length < slice) _exhausted = true;
+    return GridResult<T>(
+      rows: _loadedRows,
+      totalCount: incoming.totalCount,
+      filteredCount: incoming.filteredCount,
+      groups: incoming.groups,
+      aggregates: incoming.aggregates,
+      stats: incoming.stats,
+      sourceIndexOf: incoming.sourceIndexOf,
+    );
+  }
+
   void _clearResult() {
     _result = null;
     _visibleRows = const [];
@@ -646,11 +699,12 @@ class GridController<T> with GridChangeNotifier {
     _loadingGroups.clear();
   }
 
-  void _apply(GridResult<T> result) {
+  void _apply(GridResult<T> incoming) {
     // Read the identities the user is pointing at before the rows change
     // under them.
     final tracked = _trackedRowKeys();
 
+    final result = isInfinite ? _accumulate(incoming) : incoming;
     _result = result;
 
     // The page the user is on may no longer exist: rows removed elsewhere, or
@@ -927,7 +981,9 @@ class GridController<T> with GridChangeNotifier {
   Map<int, Object>? _trackedRowKeys() {
     final key = rowKey;
     if (key == null) return null;
-    final indices = <int>{...selection.rows};
+    // Only the rows whose identity has to be followed: for a select-all that
+    // is the handful of exceptions, not every row in the grid.
+    final indices = <int>{...selection.followedRows};
     final active = selection.activeCell;
     if (active != null) indices.add(active.row);
     final anchor = selection.anchor;
@@ -1224,6 +1280,7 @@ class GridController<T> with GridChangeNotifier {
   void setColumns(List<GridColumn<T>> columns) {
     assert(_noDuplicateFields(columns));
     _columns = List<GridColumn<T>>.of(columns);
+    _columnsChanged();
     _dataSource.columns = columnsByField;
     // New columns change the geometry as well as the rows, and the batch
     // unions the two into one notification rather than two rebuilds.
@@ -1330,6 +1387,7 @@ class GridController<T> with GridChangeNotifier {
     final index = _columns.indexWhere((c) => c.field == field);
     if (index < 0 || _columns[index].visible == visible) return;
     _columns[index] = _columns[index].copyWith(visible: visible);
+    _columnsChanged();
     batch(() {
       notifyListeners(changes: const {GridChange.layout});
       // A hidden column leaves the search fields, so the rows can change too.
@@ -1341,6 +1399,7 @@ class GridController<T> with GridChangeNotifier {
     final index = _columns.indexWhere((c) => c.field == field);
     if (index < 0 || _columns[index].pin == pin) return;
     _columns[index] = _columns[index].copyWith(pin: pin);
+    _columnsChanged();
     notifyListeners(changes: const {GridChange.layout});
   }
 
@@ -1375,6 +1434,7 @@ class GridController<T> with GridChangeNotifier {
       insertAt = _columns.indexWhere((c) => c.field == rest[target]);
     }
     _columns.insert(insertAt < 0 ? _columns.length : insertAt, moved);
+    _columnsChanged();
     notifyListeners(changes: const {GridChange.layout});
   }
 
@@ -1648,15 +1708,23 @@ class GridController<T> with GridChangeNotifier {
   }
 
   /// The rows pinned to the top, in display order.
+  ///
+  /// A read-only [RowSlice] onto [visibleRows], not a copy: copying a window
+  /// onto a lazy row list builds every row in it, and an adapter reads these
+  /// bands every frame.
   List<GridRow<T>> get frozenTopRows =>
-      _visibleRows.sublist(0, effectiveFrozenTop);
+      RowSlice<T>(_visibleRows, 0, effectiveFrozenTop);
 
   /// The rows pinned to the bottom, in display order.
-  List<GridRow<T>> get frozenBottomRows =>
-      _visibleRows.sublist(_visibleRows.length - effectiveFrozenBottom);
+  List<GridRow<T>> get frozenBottomRows => RowSlice<T>(
+        _visibleRows,
+        _visibleRows.length - effectiveFrozenBottom,
+        _visibleRows.length,
+      );
 
   /// The rows that actually scroll, between the two frozen bands.
-  List<GridRow<T>> get scrollableRows => _visibleRows.sublist(
+  List<GridRow<T>> get scrollableRows => RowSlice<T>(
+        _visibleRows,
         effectiveFrozenTop,
         _visibleRows.length - effectiveFrozenBottom,
       );
@@ -2400,6 +2468,7 @@ class GridController<T> with GridChangeNotifier {
         if (byField.containsKey(column.field)) restored.add(column);
       }
       _columns = restored;
+      _columnsChanged();
       _dataSource.columns = columnsByField;
     }
 

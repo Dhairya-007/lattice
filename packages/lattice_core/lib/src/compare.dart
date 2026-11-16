@@ -120,9 +120,21 @@ bool valuesEqualFolded(Object? a, Object? b) => compareValuesFolded(a, b) == 0;
 /// it is deliberately not a full Unicode collation, which would need tables
 /// this package will not carry.
 String foldText(String text) {
+  // Text that is already lower-case ASCII folds to itself, and that is the
+  // overwhelmingly common case: it is returned unchanged, without the scan
+  // and the copy `toLowerCase` would make. A sort that folds a key per row
+  // depends on this being free when there is nothing to do.
+  var needsWork = false;
+  for (var i = 0; i < text.length; i++) {
+    final unit = text.codeUnitAt(i);
+    if ((unit >= 0x41 && unit <= 0x5A) || unit > 0x7F) {
+      needsWork = true;
+      break;
+    }
+  }
+  if (!needsWork) return text;
+
   final lower = text.toLowerCase();
-  // Overwhelmingly the common case is plain ASCII, which needs no folding
-  // and must not pay for a scan that rewrites anything.
   var needsFolding = false;
   for (var i = 0; i < lower.length; i++) {
     if (lower.codeUnitAt(i) > 0x7F) {
@@ -361,6 +373,18 @@ int _lowerUnit(int unit) {
 String naturalSortKey(Object? value) {
   if (value is! String) return value == null ? '' : foldText('$value');
   final text = foldText(value);
+  // No digits means no chunking to do, and the folded text is already the
+  // key - worth testing for, because building the key character by character
+  // allocates where returning the text does not.
+  var hasDigit = false;
+  for (var i = 0; i < text.length; i++) {
+    if (_isDigit(text.codeUnitAt(i))) {
+      hasDigit = true;
+      break;
+    }
+  }
+  if (!hasDigit) return text;
+
   final out = StringBuffer();
   var i = 0;
   while (i < text.length) {

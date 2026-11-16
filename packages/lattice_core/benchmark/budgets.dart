@@ -23,10 +23,23 @@
 /// to a reviewed file rather than a number nobody wrote down. When an
 /// operation legitimately gets slower, raise its ceiling in the same pull
 /// request and say why.
+///
+/// The probes added in 0.4.0 are the cliffs this gate missed. Every one of
+/// them was reachable by ordinary use and cost orders of magnitude more than
+/// the table above suggested, which is the argument for measuring the shapes
+/// a user reaches rather than the ones that are easy to measure: a filter
+/// over a thousand checkbox values, a natural sort, a wide grid's
+/// conditional formatting, a deep tree, a select-all followed by a re-sort,
+/// and an edit with a search and a sort active. Their figures are from a
+/// third machine (`m4`, an Apple M4 laptop, Dart 3.13), noted per line.
 library;
 
 /// Ceiling per operation, keyed by the row count it was measured at.
+///
+/// A probe whose cost does not depend on the row count is keyed by 0; see
+/// [fixedShapeCeilings], which is folded in below.
 const Map<String, Map<int, double>> benchmarkCeilings = {
+  ...fixedShapeCeilings,
   // local 0.05 / 0.35 · ci 0.05 / 0.53
   'first load (no sort, no filter)': {10000: 2, 50000: 2},
   // local 4.50 / 27.51 · ci 2.89 / 16.89
@@ -51,4 +64,38 @@ const Map<String, Map<int, double>> benchmarkCeilings = {
   'scroll window lookup x1000': {10000: 2, 50000: 2},
   // local 0.16 / 0.85 · ci 0.42 / 0.81
   'variable row metrics build': {10000: 2, 50000: 3},
+
+  // -- Added in 0.4.0 -------------------------------------------------------
+
+  // m4 1.90 / 6.20. Before compiled filters this was 1,920 ms at 50k: the
+  // condition walked every selected value for every row.
+  'isIn filter, 1000 values': {10000: 5, 50000: 16},
+  // m4 9.06 / 46.35. Before the sort key it was 2,405 ms at 50k, built a
+  // RegExp per comparison, and was 45x the default sort.
+  'natural sort by one column': {10000: 25, 50000: 120},
+  // m4 16.86 / 88.35. The one cliff 0.4.0 does not fix: a single commit
+  // invalidates the whole pipeline, so the grid re-indexes, re-filters and
+  // re-sorts for one changed cell. Row-level revisions are the fix, and they
+  // are a release of their own. The ceiling is here so the cost cannot grow
+  // unnoticed in the meantime.
+  'edit one cell with a search and a sort active': {10000: 45, 50000: 230},
+  // m4 4.32 / 26.64, with every row selected. Select-all itself is now O(1) -
+  // it was 109 ms at 1M building a set of every index - and the re-sort that
+  // follows it no longer has a selected row to remap per row.
+  'select all, then re-sort': {10000: 12, 50000: 70},
+  // m4 0.14 / 0.04. A band is a view onto the visible rows; copying one
+  // materialised every lazy row behind it, 4.5 ms per read at 50k.
+  'read the scrollable band x100': {10000: 2, 50000: 2},
+};
+
+/// Ceilings for the probes whose cost does not depend on the row count.
+///
+/// Stored under size 0 in [benchmarkCeilings] so the check reads them the
+/// same way; kept here as its own note because the shapes are fixed.
+const Map<String, Map<int, double>> fixedShapeCeilings = {
+  // m4 1.19. Was 13.48 ms - 80% of a frame - because every call scanned the
+  // column list and built a cache key string.
+  'conditional formatting, 40 rows x 200 columns': {0: 5},
+  // m4 2.36. Was 110 ms, and overflowed the stack past ~4,500 levels.
+  'flatten a 4000-deep tree': {0: 12},
 };

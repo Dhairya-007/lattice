@@ -140,20 +140,62 @@ class CellRange {
 enum SelectionCoverage { none, some, all }
 
 /// Holds and mutates the current selection.
+///
+/// "Everything is selected" is held as a flag with a set of exceptions rather
+/// than as a set of every index. Select-all over a million rows built a
+/// million-entry set - 109ms, and then an entry to remap per row on every
+/// re-sort - to express one bit of information. Inverted, select-all, the
+/// coverage a header checkbox reads, and every membership test are O(1).
 class SelectionState {
   SelectionState({this.mode = SelectionMode.multiRow});
 
   SelectionMode mode;
 
+  /// Selected indices, or - when [_inverted] - the ones left out.
   final Set<int> _rows = <int>{};
+
+  /// Whether [_rows] lists what is *not* selected.
+  bool _inverted = false;
+
+  /// How many rows "everything" covered when it was selected.
+  int _invertedCount = 0;
+
   CellAddress? _activeCell;
   CellAddress? _anchor;
   CellRange? _range;
 
-  /// Selected row indices, in ascending order.
-  List<int> get selectedRows => _rows.toList()..sort();
+  List<int>? _sortedCache;
 
-  Set<int> get rows => Set.unmodifiable(_rows);
+  /// Selected row indices, in ascending order.
+  ///
+  /// Materialised on demand and cached until the selection changes: it used
+  /// to sort a fresh copy on every read, which an adapter does once per
+  /// frame. Reading it over an inverted selection costs one entry per row, so
+  /// prefer [isRowSelected] and [rowCount] where they will do.
+  List<int> get selectedRows => _sortedCache ??= _materialise();
+
+  List<int> _materialise() {
+    if (!_inverted) return _rows.toList()..sort();
+    return [
+      for (var i = 0; i < _invertedCount; i++)
+        if (!_rows.contains(i)) i,
+    ];
+  }
+
+  /// Whether everything is selected, held as a flag rather than as a set.
+  bool get isEverythingSelected => _inverted && _rows.isEmpty;
+
+  /// The row indices whose identity has to be followed across a rebuild.
+  ///
+  /// The selected rows for an ordinary selection, and the *exceptions* for an
+  /// inverted one - everything else stays selected whatever moves where, so
+  /// a select-all over a million rows has nothing to follow.
+  Iterable<int> get followedRows => _rows;
+
+  /// Drops the cached list of indices.
+  void _changed() => _sortedCache = null;
+
+  Set<int> get rows => Set.unmodifiable(_inverted ? _materialise() : _rows);
 
   /// The focused cell, which keyboard navigation moves.
   CellAddress? get activeCell => _activeCell;
@@ -166,16 +208,44 @@ class SelectionState {
   /// Row anchors carry an empty field, because a row click has no column.
   CellAddress? get anchor => _anchor;
 
-  bool get isEmpty => _rows.isEmpty && _activeCell == null;
+  bool get isEmpty => rowCount == 0 && _activeCell == null;
 
-  int get rowCount => _rows.length;
+  int get rowCount {
+    if (!_inverted) return _rows.length;
+    final count = _invertedCount - _rows.length;
+    return count < 0 ? 0 : count;
+  }
 
-  bool isRowSelected(int index) => _rows.contains(index);
+  bool isRowSelected(int index) {
+    if (index < 0) return false;
+    if (!_inverted) return _rows.contains(index);
+    return index < _invertedCount && !_rows.contains(index);
+  }
+
+  /// Marks [index] selected or not, whichever way round the set is held.
+  void _setSelected(int index, bool selected) {
+    _changed();
+    if (_inverted == selected) {
+      _rows.remove(index);
+    } else {
+      _rows.add(index);
+    }
+  }
+
+  /// Replaces the selection with exactly [indices].
+  void _replaceWith(Iterable<int> indices) {
+    _changed();
+    _inverted = false;
+    _invertedCount = 0;
+    _rows
+      ..clear()
+      ..addAll(indices);
+  }
 
   bool isCellSelected(CellAddress cell) {
     if (_range != null && _range!.contains(cell)) return true;
     if (_activeCell == cell) return true;
-    return _rows.contains(cell.row) &&
+    return isRowSelected(cell.row) &&
         (mode == SelectionMode.singleRow || mode == SelectionMode.multiRow);
   }
 
@@ -187,25 +257,19 @@ class SelectionState {
         return;
       case SelectionMode.singleRow:
       case SelectionMode.singleCell:
-        _rows
-          ..clear()
-          ..add(index);
+        _replaceWith([index]);
         _anchor = CellAddress(index, '');
       case SelectionMode.multiRow:
       case SelectionMode.cellRange:
         if (modifiers.extend && _anchor != null) {
           final from = _anchor!.row <= index ? _anchor!.row : index;
           final to = _anchor!.row <= index ? index : _anchor!.row;
-          _rows
-            ..clear()
-            ..addAll([for (var i = from; i <= to; i++) i]);
+          _replaceWith([for (var i = from; i <= to; i++) i]);
         } else if (modifiers.toggle) {
-          if (!_rows.remove(index)) _rows.add(index);
+          _setSelected(index, !isRowSelected(index));
           _anchor = CellAddress(index, '');
         } else {
-          _rows
-            ..clear()
-            ..add(index);
+          _replaceWith([index]);
           _anchor = CellAddress(index, '');
         }
     }
@@ -248,7 +312,19 @@ class SelectionState {
 
   /// How much of [rowCount] rows is selected.
   SelectionCoverage coverageOf(int rowCount) {
-    if (rowCount == 0 || _rows.isEmpty) return SelectionCoverage.none;
+    if (rowCount == 0) return SelectionCoverage.none;
+    if (_inverted) {
+      // Exceptions outside the current row count are not holes in it.
+      var holes = 0;
+      for (final index in _rows) {
+        if (index >= 0 && index < rowCount) holes++;
+      }
+      if (holes == 0) return SelectionCoverage.all;
+      return holes >= rowCount
+          ? SelectionCoverage.none
+          : SelectionCoverage.some;
+    }
+    if (_rows.isEmpty) return SelectionCoverage.none;
     // Count only rows that still exist: a stale index must not make a
     // partial selection look complete.
     var inRange = 0;
@@ -259,15 +335,21 @@ class SelectionState {
     return inRange >= rowCount ? SelectionCoverage.all : SelectionCoverage.some;
   }
 
+  /// Selects every one of [rowCount] rows, in constant time.
   void selectAll(int rowCount) {
-    if (mode == SelectionMode.multiRow || mode == SelectionMode.cellRange) {
-      _rows
-        ..clear()
-        ..addAll([for (var i = 0; i < rowCount; i++) i]);
+    if (mode != SelectionMode.multiRow && mode != SelectionMode.cellRange) {
+      return;
     }
+    _changed();
+    _inverted = true;
+    _invertedCount = rowCount < 0 ? 0 : rowCount;
+    _rows.clear();
   }
 
   void clear() {
+    _changed();
+    _inverted = false;
+    _invertedCount = 0;
     _rows.clear();
     _activeCell = null;
     _anchor = null;
@@ -288,14 +370,30 @@ class SelectionState {
   /// them are not the cells that were between them before; following the
   /// anchor and the focus is the only rule that keeps a rectangle a rectangle.
   void remapRows(int? Function(int index) moved, {required int rowCount}) {
-    final rows = <int>{};
-    for (final index in _rows) {
-      final next = moved(index);
-      if (next != null && next >= 0 && next < rowCount) rows.add(next);
+    _changed();
+    if (_inverted) {
+      // Everything stays selected whatever moved where; only the holes have
+      // to follow their rows. This is the point of holding it inverted: a
+      // select-all over a million rows remaps nothing at all.
+      final holes = <int>{};
+      for (final index in _rows) {
+        final next = moved(index);
+        if (next != null && next >= 0 && next < rowCount) holes.add(next);
+      }
+      _rows
+        ..clear()
+        ..addAll(holes);
+      _invertedCount = rowCount;
+    } else {
+      final rows = <int>{};
+      for (final index in _rows) {
+        final next = moved(index);
+        if (next != null && next >= 0 && next < rowCount) rows.add(next);
+      }
+      _rows
+        ..clear()
+        ..addAll(rows);
     }
-    _rows
-      ..clear()
-      ..addAll(rows);
 
     CellAddress? remap(CellAddress? cell) {
       if (cell == null) return null;
@@ -323,7 +421,9 @@ class SelectionState {
   /// range over rows 0..5 of a grid that now has two rows went on reporting
   /// `lastRow` 5, and a copy of it emitted rows that are not there.
   void clampTo(int rowCount) {
+    _changed();
     _rows.removeWhere((i) => i >= rowCount);
+    if (_inverted && rowCount < _invertedCount) _invertedCount = rowCount;
     if (rowCount <= 0) {
       _activeCell = null;
       _anchor = null;

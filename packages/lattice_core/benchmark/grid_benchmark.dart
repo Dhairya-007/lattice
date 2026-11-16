@@ -11,7 +11,7 @@
 import 'dart:io' show exitCode;
 import 'dart:math';
 
-import 'package:lattice_core/lattice_core.dart';
+import 'package:lattice_core/advanced.dart';
 
 import 'budgets.dart';
 
@@ -174,6 +174,20 @@ void main(List<String> args) {
     }
   }
 
+  /// A probe whose cost does not depend on the row count.
+  ///
+  /// Checked against the ceiling stored under size 0.
+  void recordFixed(String label, double Function() run,
+      {required bool markdown}) {
+    final ms = run();
+    results[label] = [ms];
+    if (markdown) {
+      print('| $label | ${ms.toStringAsFixed(2)} |');
+    } else {
+      print([label.padRight(40), ms.toStringAsFixed(2).padLeft(10)].join());
+    }
+  }
+
   // Built once per size: the benchmark measures operations on an existing
   // grid, not the one-off cost of creating it.
   final grids = <int, GridController<LogEntry>>{};
@@ -310,6 +324,120 @@ void main(List<String> args) {
     return measure(grid.exportCsv, runs: 3, warmup: 1);
   });
 
+  // The probes below are the cliffs the first version of this gate missed.
+  // Each one is an operation a user reaches by ordinary means and that cost
+  // far more than the table above suggested.
+
+  record('isIn filter, 1000 values', (size) {
+    final grid = grids[size]!;
+    grid.clearGroups();
+    grid.clearSorts();
+    grid.setSearch('');
+    final values = [for (var i = 0; i < 1000; i++) 'service-$i'];
+    var flip = 0;
+    return measure(() {
+      grid.setColumnFilter(
+        'service',
+        FilterCondition(
+          field: 'service',
+          operator: FilterOperator.isIn,
+          // One real value among a thousand, which is the shape a checkbox
+          // filter list over a wide column produces.
+          value: [..._services.take(1 + (flip++ % 2)), ...values],
+        ),
+      );
+    }, runs: 3, warmup: 1);
+  });
+
+  record('natural sort by one column', (size) {
+    final grid = grids[size]!;
+    grid.clearFilters();
+    final natural = [
+      for (final column in columns())
+        if (column.field == 'message')
+          column.copyWith(comparator: compareValuesNatural)
+        else
+          column,
+    ];
+    grid.setColumns(natural);
+    var ascending = true;
+    final ms = measure(() {
+      grid.setSorts([
+        SortSpec(
+          'message',
+          direction:
+              ascending ? SortDirection.ascending : SortDirection.descending,
+        ),
+      ]);
+      ascending = !ascending;
+    }, runs: 3, warmup: 1);
+    grid.setColumns(columns());
+    grid.clearSorts();
+    return ms;
+  });
+
+  record('edit one cell with a search and a sort active', (size) {
+    final grid = grids[size]!;
+    final source = sources[size]!;
+    grid.clearFilters();
+    grid.setSorts(const [SortSpec('message')]);
+    grid.setSearch('retry');
+    var i = 0;
+    final ms = measure(() {
+      final row = source.rows[i % 100];
+      source.replaceAt(
+        i % 100,
+        LogEntry(
+          id: row.id,
+          service: row.service,
+          level: row.level,
+          message: row.message,
+          latencyMs: (i++ % 1800) + 1,
+          at: row.at,
+          acknowledged: row.acknowledged,
+        ),
+      );
+    }, runs: 3, warmup: 1);
+    grid.setSearch('');
+    grid.clearSorts();
+    return ms;
+  });
+
+  record('select all, then re-sort', (size) {
+    final grid = grids[size]!;
+    grid.clearFilters();
+    grid.setSearch('');
+    var ascending = true;
+    return measure(() {
+      grid.selectAllRows();
+      grid.setSorts([
+        SortSpec(
+          'latencyMs',
+          direction:
+              ascending ? SortDirection.ascending : SortDirection.descending,
+        ),
+      ]);
+      ascending = !ascending;
+    }, runs: 3, warmup: 1);
+  });
+
+  record('read the scrollable band x100', (size) {
+    final grid = grids[size]!;
+    grid.clearSorts();
+    grid.frozenRowCount = 2;
+    final ms = measure(() {
+      for (var i = 0; i < 100; i++) {
+        final band = grid.scrollableRows;
+        // What an adapter does: read the window it is about to draw.
+        for (var row = 0; row < 40 && row < band.length; row++) {
+          band[row];
+        }
+      }
+    });
+    grid.frozenRowCount = 0;
+    return ms;
+  });
+
   record('scroll window lookup x1000', (size) {
     final metrics = RowMetrics.uniform(rowCount: size, rowHeight: 40);
     return measure(() {
@@ -332,6 +460,54 @@ void main(List<String> args) {
       warmup: 1,
     );
   });
+
+  // Shapes whose cost does not depend on the row count: a wide grid's
+  // formatting pass, and a deep tree's flattening.
+  recordFixed('conditional formatting, 40 rows x 200 columns', () {
+    final wide = <GridColumn<Map<String, Object?>>>[
+      for (var c = 0; c < 200; c++)
+        GridColumn<Map<String, Object?>>(
+          field: 'c$c',
+          type: ColumnType.number,
+          rule: DataBarRule(),
+        ),
+    ];
+    final rows = [
+      for (var r = 0; r < 40; r++)
+        <String, Object?>{for (var c = 0; c < 200; c++) 'c$c': (r * c) % 97},
+    ];
+    final grid = GridController<Map<String, Object?>>(
+      columns: wide,
+      dataSource: InMemoryDataSource<Map<String, Object?>>(rows),
+    );
+    final ms = measure(() {
+      for (final row in rows) {
+        for (final column in wide) {
+          grid.decorationFor(column.field, row);
+        }
+      }
+    });
+    grid.dispose();
+    return ms;
+  }, markdown: markdown);
+
+  recordFixed('flatten a 4000-deep tree', () {
+    var node = _Chain(4000, const []);
+    for (var level = 3999; level >= 0; level--) {
+      node = _Chain(level, [node]);
+    }
+    final expansion = GroupExpansionState();
+    return measure(
+      () => flattenTree<_Chain>(
+        rows: [node],
+        spec: TreeSpec<_Chain>(childrenOf: (n) => n.children),
+        keyOf: (n) => n.id,
+        expansion: expansion,
+      ),
+      runs: 3,
+      warmup: 1,
+    );
+  }, markdown: markdown);
 
   print('');
   print('Interactive budget is one frame, 16.7 ms. Anything above that is');
@@ -370,6 +546,14 @@ void main(List<String> args) {
   if (check && breaches.isNotEmpty) exitCode = _breachExitCode;
 }
 
+/// One link of a deep chain, for the tree-depth probe.
+class _Chain {
+  _Chain(this.id, this.children);
+
+  final int id;
+  final List<_Chain> children;
+}
+
 /// Operations that cost more than [benchmarkCeilings] allows.
 ///
 /// A size with no ceiling recorded is not checked rather than treated as
@@ -381,6 +565,15 @@ List<String> _breaches(Map<String, List<double>> results, List<int> sizes) {
     final label = entry.key.trim();
     final ceilings = benchmarkCeilings[label];
     if (ceilings == null) continue;
+    // A fixed-shape probe has one sample and its ceiling under size 0.
+    if (entry.value.length == 1 && sizes.length != 1) {
+      final ceiling = ceilings[0];
+      if (ceiling != null && entry.value.first > ceiling) {
+        out.add('$label: ${entry.value.first.toStringAsFixed(2)} ms, '
+            'ceiling $ceiling ms');
+      }
+      continue;
+    }
     for (var i = 0; i < sizes.length; i++) {
       final ceiling = ceilings[sizes[i]];
       if (ceiling == null) continue;

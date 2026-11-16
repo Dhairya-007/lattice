@@ -64,12 +64,17 @@ class DataGridRow<T> extends GridRow<T> {
   const DataGridRow({
     required super.index,
     required this.data,
-    required this.sourceIndex,
+    int sourceIndex = -1,
+    int Function(T row)? sourceIndexOf,
     super.depth = 0,
     this.tree,
-  });
+  })  : _sourceIndex = sourceIndex,
+        _sourceIndexOf = sourceIndexOf;
 
   final T data;
+
+  final int _sourceIndex;
+  final int Function(T row)? _sourceIndexOf;
 
   /// Index of [data] in the unordered, unfiltered source, or -1 when the
   /// source cannot say.
@@ -79,7 +84,15 @@ class DataGridRow<T> extends GridRow<T> {
   /// in the *sorted* result, which is a different number and was only ever
   /// right for an unsorted grid. A remote source that pages has no way to
   /// know, and reports -1.
-  final int sourceIndex;
+  ///
+  /// Resolved on demand. The answer is a lookup by row identity, and a
+  /// grouped grid flattens every matching row on every toggle: paying for it
+  /// per row whether or not anyone reads it put 8ms on a group toggle at 50k
+  /// rows, for a number most grids never ask for.
+  int get sourceIndex {
+    if (_sourceIndex >= 0) return _sourceIndex;
+    return _sourceIndexOf?.call(data) ?? _sourceIndex;
+  }
 
   /// This row's place in the hierarchy, or null in a flat or grouped grid.
   final TreeRowInfo? tree;
@@ -279,7 +292,7 @@ List<GridRow<T>> flattenGroups<T>(
           out.add(DataGridRow<T>(
             index: out.length,
             data: row,
-            sourceIndex: sourceIndexOf?.call(row) ?? -1,
+            sourceIndexOf: sourceIndexOf,
             depth: node.depth + 1,
           ));
         }
@@ -341,13 +354,54 @@ class LazyDataRowList<T> extends ListBase<GridRow<T>> {
     return DataGridRow<T>(
       index: index,
       data: substitute == null ? row : substitute(row),
-      sourceIndex: _sourceIndexOf?.call(row) ?? offset + index,
+      sourceIndex: _sourceIndexOf == null ? offset + index : -1,
+      sourceIndexOf: _sourceIndexOf,
     );
   }
 
   @override
   void operator []=(int index, GridRow<T> value) =>
       throw UnsupportedError('The grid row list is read-only.');
+}
+
+/// A read-only window onto part of a row list.
+///
+/// `sublist` copies, and copying a window onto a lazy row list materialises
+/// every row in it: reading `scrollableRows` on an ungrouped 50k-row grid
+/// built 50k wrapper objects, several times a frame, to show forty of them.
+/// A slice reads through instead, so it costs nothing until it is indexed.
+///
+/// Row indices are not renumbered - they are positions in the full visible
+/// list, which is what the selection, the frozen bands and scroll-to-reveal
+/// all speak in.
+class RowSlice<T> extends ListBase<GridRow<T>> {
+  RowSlice(this._rows, this.start, this.end)
+      : assert(start >= 0 && start <= end, 'an empty or forward range');
+
+  final List<GridRow<T>> _rows;
+  final int start;
+  final int end;
+
+  @override
+  int get length {
+    final count = end - start;
+    return count < 0 ? 0 : count;
+  }
+
+  @override
+  set length(int value) => throw UnsupportedError('A row slice is read-only.');
+
+  @override
+  GridRow<T> operator [](int index) {
+    if (index < 0 || index >= length) {
+      throw RangeError.index(index, this, 'index', null, length);
+    }
+    return _rows[start + index];
+  }
+
+  @override
+  void operator []=(int index, GridRow<T> value) =>
+      throw UnsupportedError('A row slice is read-only.');
 }
 
 /// Inserts a [DetailGridRow] after every row whose panel is open, renumbering
@@ -482,7 +536,8 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
       return DataGridRow<T>(
         index: index,
         data: data,
-        sourceIndex: _sourceIndexOf?.call(raw) ?? offset + found,
+        sourceIndex: _sourceIndexOf == null ? offset + found : -1,
+        sourceIndexOf: _sourceIndexOf,
       );
     }
     // The only other row at this position is the panel under that row.

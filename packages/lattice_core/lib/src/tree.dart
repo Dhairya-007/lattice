@@ -157,7 +157,7 @@ List<GridRow<T>> flattenTree<T>({
       out.add(DataGridRow<T>(
         index: out.length,
         data: substitute == null ? row : substitute(row),
-        sourceIndex: sourceIndexOf?.call(row) ?? -1,
+        sourceIndexOf: sourceIndexOf,
         depth: pending.depth,
         tree: TreeRowInfo(
           path: pathKeySegment(key),

@@ -157,22 +157,50 @@ List<T> sortRows<T>(
     for (final level in levels) level.nulls == NullsPosition.first,
   ];
 
-  // A text column folds case and accents away, and folding inside the
-  // comparator would do it O(n log n) times. The folded key is computed once
-  // per row here; the raw key stays for the exact tiebreak that keeps the
-  // order total.
+  // Two orderings cost more per comparison than they need to, and both can
+  // be answered by a key computed once per row: a case- and accent-folded
+  // text order, and a natural one. The raw key stays for the exact tiebreak
+  // that keeps the order total.
   final folded = List<List<String>?>.filled(depth, null);
+  final comparatorForLevel = List<Comparator<Object?>?>.of(comparators);
+  // Levels whose key turned out to equal the value itself, so the plain
+  // string comparison already gives the order the key would have.
+  final plainString = List<bool>.filled(depth, false);
   for (var level = 0; level < depth; level++) {
-    if (comparators[level] != null) continue;
-    if (columns[levels[level].field]!.type != ColumnType.text) continue;
+    final column = columns[levels[level].field]!;
+    final comparator = comparators[level];
+    final natural = comparator == compareValuesNatural;
+    if (comparator != null && !natural) continue;
+    if (!natural && column.type != ColumnType.text) continue;
     final base = level * count;
     if (_keyKind(keys, base, count) != _kindString) continue;
     final keysForLevel = List<String>.filled(count, '');
+    // A column that is already lower case and unaccented folds to itself, and
+    // then the folded comparison is pure overhead: two string compares where
+    // one would do, on a column where ties are common. Detecting that keeps
+    // the folded default as cheap as the code-unit order it replaced.
+    var changed = false;
     for (var i = 0; i < count; i++) {
       final value = keys[base + i];
-      if (value != null) keysForLevel[i] = foldText(value as String);
+      if (value == null) continue;
+      final raw = value as String;
+      final key = natural ? naturalSortKey(raw) : foldText(raw);
+      keysForLevel[i] = key;
+      if (!changed && key != raw) changed = true;
     }
-    folded[level] = keysForLevel;
+    // The key answers what the comparator was for.
+    if (natural) comparatorForLevel[level] = null;
+    if (changed) {
+      folded[level] = keysForLevel;
+    } else {
+      // Every key came back identical to its value - a column that is
+      // already lower case and unaccented, or has no digits to read as
+      // numbers - so comparing the values directly is the same order for a
+      // fraction of the work. This is what keeps a natural sort over
+      // digit-free text, and the folded default over ordinary data, as cheap
+      // as the plain comparison.
+      plainString[level] = true;
+    }
   }
 
   final order = List<int>.generate(count, (i) => i, growable: false);
@@ -180,7 +208,7 @@ List<T> sortRows<T>(
   // One sort column is the overwhelmingly common case - it is what a header
   // click produces - so it gets a comparison with no type tests and no
   // closure indirection in the inner loop.
-  if (depth == 1 && comparators[0] == null) {
+  if (depth == 1 && comparatorForLevel[0] == null) {
     final ascendingOnly = ascending[0];
     final nullsFirstOnly = nullsFirst[0];
     final kind = _keyKind(keys, 0, count);
@@ -233,10 +261,15 @@ List<T> sortRows<T>(
     }
   }
 
-  final fallbacks = [
+  // Whether a level needs the folding comparison at comparison time, which
+  // is only so when its values are text that folding changes and no key was
+  // precomputed for it.
+  final foldsAtCompare = [
     for (var level = 0; level < depth; level++)
-      comparators[level] ??
-          defaultCompareFor(columns[levels[level].field]!.type),
+      comparatorForLevel[level] == null &&
+          !plainString[level] &&
+          folded[level] == null &&
+          columns[levels[level].field]!.type == ColumnType.text,
   ];
 
   order.sort((a, b) {
@@ -251,11 +284,21 @@ List<T> sortRows<T>(
       }
       final foldedLevel = folded[level];
       var cmp = 0;
+      // Explicit branches rather than a comparator read out of a list: a
+      // tear-off called per comparison per level cost half as much again as
+      // the direct call over 50k rows and three levels.
       if (foldedLevel != null) {
         cmp = foldedLevel[a].compareTo(foldedLevel[b]);
         if (cmp == 0) cmp = (va as String).compareTo(vb as String);
       } else {
-        cmp = fallbacks[level](va, vb);
+        final comparator = comparatorForLevel[level];
+        if (comparator != null) {
+          cmp = comparator(va, vb);
+        } else if (foldsAtCompare[level]) {
+          cmp = compareValuesCaseInsensitive(va, vb);
+        } else {
+          cmp = compareValues(va, vb);
+        }
       }
       if (cmp != 0) return ascending[level] ? cmp : -cmp;
     }
