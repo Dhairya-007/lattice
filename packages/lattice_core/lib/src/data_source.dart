@@ -443,10 +443,189 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   }
 
   /// Replaces the row at [index], as an edit commit does.
+  ///
+  /// The pipeline is patched rather than thrown away where that is possible:
+  /// see [_patchRow]. One edited cell used to re-index, re-filter and re-sort
+  /// the whole table - 85 ms at 50k rows with a search and a sort active, for
+  /// a change to one value.
   void replaceAt(int index, T row) {
+    final previous = _rows[index];
     _rows[index] = row;
     bumpRevision();
+    _patchRow(index, previous, row);
     notifyListeners();
+  }
+
+  /// Keeps the memoised stages valid across a single replaced row, or leaves
+  /// them stale for a full recompute.
+  ///
+  /// Returns whether the patch was applied, which is only for the assertions
+  /// and the tests: a caller cannot tell the difference, and that is the
+  /// point. Where anything about the current state is not understood here,
+  /// the stages are left stale and the next fetch rebuilds them - a slow
+  /// answer is always allowed; a wrong one is not.
+  bool _patchRow(int index, T previous, T updated) {
+    final query = _lastQuery;
+    if (query == null) return false;
+    // The caches have to have been valid for the revision before this one.
+    final before = revision - 1;
+    if (_matchedRevision != before) return false;
+    if (_matchedKey.isEmpty && _matchedRows.isEmpty) return false;
+    if (query.isGrouped) {
+      // The group tree is rebuilt from the ordered rows either way, and the
+      // lazy-group path has its own book-keeping.
+      return false;
+    }
+
+    final fields = _searchFieldsFor(query);
+    final needle = query.needle;
+    if (needle.isNotEmpty) {
+      // The search index has to be in hand and cover the same fields.
+      if (_indexRevision != before || _indexKey != fields.join(',')) {
+        return false;
+      }
+      if (_searchIndex.length != _rows.length) return false;
+    }
+
+    final sorted = query.sorts.isNotEmpty;
+    if (sorted) {
+      if (_orderedRevision != before ||
+          _orderedKey != _orderedKeyFor(query) ||
+          _orderedRows.length != _orderedIndices.length) {
+        return false;
+      }
+    }
+
+    // 1. The row's searchable text.
+    if (needle.isNotEmpty || _indexRevision == before) {
+      if (_indexRevision == before && _searchIndex.length == _rows.length) {
+        final resolved = [
+          for (final field in _indexKey.split(','))
+            if (columns[field] != null) columns[field]!,
+        ];
+        final buffer = StringBuffer();
+        for (var c = 0; c < resolved.length; c++) {
+          if (c > 0) buffer.write('\u0001');
+          buffer.write(resolved[c].formattedValue(updated));
+        }
+        _searchIndex[index] = foldText(buffer.toString());
+        _indexRevision = revision;
+      }
+    }
+
+    // 2. Does the row still match?
+    final filter = query.filter;
+    final compiled = filter?.compile(types: columnTypes);
+    final matchesSearch =
+        needle.isEmpty || _searchIndex[index].contains(needle);
+    final matchesFilter =
+        compiled == null || compiled.test((f) => columns[f]?.value(updated));
+    final matches = matchesSearch && matchesFilter;
+
+    final at = _positionInMatched(index);
+    final wasMatched = at >= 0;
+    if (wasMatched && matches) {
+      _matchedRows = List<T>.of(_matchedRows)..[at] = updated;
+    } else if (wasMatched && !matches) {
+      _matchedRows = List<T>.of(_matchedRows)..removeAt(at);
+      _matchedIndices = List<int>.of(_matchedIndices)..removeAt(at);
+    } else if (!wasMatched && matches) {
+      final insertAt = _insertionInMatched(index);
+      _matchedRows = List<T>.of(_matchedRows)..insert(insertAt, updated);
+      _matchedIndices = List<int>.of(_matchedIndices)..insert(insertAt, index);
+    }
+    _matchedRevision = revision;
+    // Everything derived from the matched set - stats, distinct values, the
+    // source-position lookup - is keyed on this.
+    _matchedGeneration++;
+
+    // 3. Where does it belong in the order?
+    if (!sorted) {
+      _orderedRows = _matchedRows;
+      _orderedIndices = _matchedIndices;
+      _orderedRevision = revision;
+      return true;
+    }
+
+    final rows = List<T>.of(_orderedRows);
+    final indices = List<int>.of(_orderedIndices);
+    final wasAt = indices.indexOf(index);
+    if (wasAt >= 0) {
+      rows.removeAt(wasAt);
+      indices.removeAt(wasAt);
+    }
+    if (matches) {
+      final comparator = buildComparator<T>(query.sorts, columns);
+      final insertAt =
+          _insertionInOrder(rows, indices, updated, index, comparator);
+      rows.insert(insertAt, updated);
+      indices.insert(insertAt, index);
+    }
+    _orderedRows = rows;
+    _orderedIndices = indices;
+    _orderedRevision = revision;
+    return true;
+  }
+
+  /// Position of source index [index] in [_matchedIndices], or -1.
+  ///
+  /// The indices are ascending, so this is a binary search.
+  int _positionInMatched(int index) {
+    var low = 0;
+    var high = _matchedIndices.length - 1;
+    while (low <= high) {
+      final mid = (low + high) >> 1;
+      final value = _matchedIndices[mid];
+      if (value == index) return mid;
+      if (value < index) {
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return -1;
+  }
+
+  /// Where source index [index] belongs in [_matchedIndices].
+  int _insertionInMatched(int index) {
+    var low = 0;
+    var high = _matchedIndices.length;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      if (_matchedIndices[mid] < index) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  }
+
+  /// Where [row] belongs in an already ordered list.
+  ///
+  /// Ties are broken by source position, which is what [sortOrder] does with
+  /// the input order, so the row lands exactly where a full re-sort would
+  /// have put it.
+  int _insertionInOrder(
+    List<T> rows,
+    List<int> indices,
+    T row,
+    int index,
+    Comparator<T> comparator,
+  ) {
+    var low = 0;
+    var high = rows.length;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      var cmp = comparator(rows[mid], row);
+      if (cmp == 0) cmp = indices[mid].compareTo(index);
+      if (cmp < 0) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
   }
 
   void clear() {
@@ -522,9 +701,15 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
       indices.add(index);
     }
     for (var i = 0; i < writes.length; i++) {
-      _rows[indices[i]] = writes[i].updated;
+      final at = indices[i];
+      final previous = _rows[at];
+      _rows[at] = writes[i].updated;
+      // Patched row by row, as a single edit is: a paste of twenty rows into
+      // a 50k-row grid costs twenty splices rather than a re-index, a
+      // re-filter and a re-sort. One notification for the batch either way.
+      bumpRevision();
+      _patchRow(at, previous, writes[i].updated);
     }
-    bumpRevision();
     notifyListeners();
     return [for (final write in writes) write.updated];
   }
@@ -860,18 +1045,38 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   String _orderedKey = '';
   List<T> _orderedRows = const [];
 
+  /// Source position of each row in [_orderedRows].
+  ///
+  /// Kept because it is what makes the order reproducible: a sort breaks ties
+  /// by the input position, so a row inserted into an existing order has to
+  /// be placed among its equals by source position to land where a full
+  /// re-sort would have put it.
+  List<int> _orderedIndices = const [];
+
+  String _orderedKeyFor(GridQuery query) => '$_matchedKey\u0000'
+      '${query.sorts.map((s) => s.fingerprint).join(',')}';
+
   List<T> _orderedFor(GridQuery query, List<T> matched) {
-    if (query.sorts.isEmpty) return matched;
-    final key = '$_matchedKey\u0000'
-        '${query.sorts.map((s) => s.fingerprint).join(',')}';
+    if (query.sorts.isEmpty) {
+      _orderedRows = matched;
+      _orderedIndices = _matchedIndices;
+      _orderedRevision = revision;
+      _orderedKey = _orderedKeyFor(query);
+      return matched;
+    }
+    final key = _orderedKeyFor(query);
     if (_orderedRevision == revision && _orderedKey == key) {
       return _orderedRows;
     }
-    final sorted = sortRows<T>(matched, query.sorts, columns);
+    final order = sortOrder<T>(matched, query.sorts, columns);
+    _orderedRows = [for (final i in order) matched[i]];
+    _orderedIndices = [
+      for (final i in order)
+        i < _matchedIndices.length ? _matchedIndices[i] : -1,
+    ];
     _orderedRevision = revision;
     _orderedKey = key;
-    _orderedRows = sorted;
-    return sorted;
+    return _orderedRows;
   }
 
   // -- Stage 3: aggregates and groups ---------------------------------------

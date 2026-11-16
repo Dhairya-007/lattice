@@ -126,7 +126,24 @@ List<T> sortRows<T>(
   List<SortSpec> sorts,
   Map<String, GridColumn<T>> columns,
 ) {
-  if (sorts.isEmpty || rows.length < 2) return List<T>.of(rows);
+  final order = sortOrder<T>(rows, sorts, columns);
+  return [for (final i in order) rows[i]];
+}
+
+/// The permutation [sortRows] applies: positions in [rows], in sorted order.
+///
+/// Exposed because a caller that keeps a sorted list wants to know where each
+/// row came from - a data source maintaining an ordered result alongside the
+/// source positions it was built from, so that an edit can be patched into
+/// it instead of re-sorting everything.
+List<int> sortOrder<T>(
+  List<T> rows,
+  List<SortSpec> sorts,
+  Map<String, GridColumn<T>> columns,
+) {
+  if (sorts.isEmpty || rows.length < 2) {
+    return List<int>.generate(rows.length, (i) => i, growable: false);
+  }
 
   // Read every sort key once per row rather than on every comparison. A
   // comparison sort makes O(n log n) comparisons, so calling the accessors
@@ -136,7 +153,9 @@ List<T> sortRows<T>(
     for (final sort in sorts)
       if (columns[sort.field] != null) sort,
   ];
-  if (levels.isEmpty) return List<T>.of(rows);
+  if (levels.isEmpty) {
+    return List<int>.generate(rows.length, (i) => i, growable: false);
+  }
 
   final count = rows.length;
   final depth = levels.length;
@@ -233,7 +252,7 @@ List<T> sortRows<T>(
         if (cmp != 0) return ascendingOnly ? cmp : -cmp;
         return a.compareTo(b);
       });
-      return [for (final i in order) rows[i]];
+      return order;
     }
     if (kind == _kindNum) {
       order.sort((a, b) {
@@ -245,7 +264,7 @@ List<T> sortRows<T>(
         if (cmp != 0) return ascendingOnly ? cmp : -cmp;
         return a.compareTo(b);
       });
-      return [for (final i in order) rows[i]];
+      return order;
     }
     if (kind == _kindString) {
       order.sort((a, b) {
@@ -257,7 +276,7 @@ List<T> sortRows<T>(
         if (cmp != 0) return ascendingOnly ? cmp : -cmp;
         return a.compareTo(b);
       });
-      return [for (final i in order) rows[i]];
+      return order;
     }
   }
 
@@ -306,7 +325,7 @@ List<T> sortRows<T>(
     return a.compareTo(b);
   });
 
-  return [for (final i in order) rows[i]];
+  return order;
 }
 
 /// Whether every non-null key in a level is a number, or every one a string.

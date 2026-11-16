@@ -75,12 +75,10 @@ const Map<String, Map<int, double>> benchmarkCeilings = {
   // m4 9.06 / 46.35. Before the sort key it was 2,405 ms at 50k, built a
   // RegExp per comparison, and was 45x the default sort.
   'natural sort by one column': {10000: 25, 50000: 120},
-  // m4 16.86 / 88.35. The one cliff 0.4.0 does not fix: a single commit
-  // invalidates the whole pipeline, so the grid re-indexes, re-filters and
-  // re-sorts for one changed cell. Row-level revisions are the fix, and they
-  // are a release of their own. The ceiling is here so the cost cannot grow
-  // unnoticed in the meantime.
-  'edit one cell with a search and a sort active': {10000: 45, 50000: 230},
+  // m4 0.29 / 0.71, and 3.51 at 200k. Was 16.86 / 88.35, and 371 ms at 200k,
+  // when one commit re-indexed, re-filtered and re-sorted the whole table;
+  // the row is patched into each memoised stage instead.
+  'edit one cell with a search and a sort active': {10000: 3, 50000: 4},
   // m4 4.32 / 26.64, with every row selected. Select-all itself is now O(1) -
   // it was 109 ms at 1M building a set of every index - and the re-sort that
   // follows it no longer has a selected row to remap per row.
