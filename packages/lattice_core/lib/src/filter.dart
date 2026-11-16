@@ -5,6 +5,7 @@ import 'dart:collection';
 
 import 'column.dart';
 import 'compare.dart';
+import 'editing.dart';
 
 /// Comparison applied by a [FilterCondition].
 enum FilterOperator {
@@ -787,8 +788,7 @@ Object? coerceFilterOperand(
     case ColumnType.number:
       if (operand is num || operand is BigInt) return operand;
       if (operand is String) {
-        final parsed = num.tryParse(operand.trim());
-        return parsed ?? operand;
+        return parseDecimal(operand) ?? operand;
       }
       return operand;
     case ColumnType.date:

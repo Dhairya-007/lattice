@@ -47,23 +47,56 @@ void main() {
   group('distinctValuesFor', () {
     test('lists each value once, in order', () {
       final grid = productGrid();
-      expect(
-          grid.distinctValuesFor('category'), ['Compute', 'Display', 'Input']);
+      final distinct = grid.distinctValuesFor('category');
+      expect(distinct.values, ['Compute', 'Display', 'Input']);
+      expect(distinct.truncated, isFalse);
     });
 
     test('covers the rows that match, not the ones filtered away', () {
       final grid = productGrid()..setSearch('mouse');
-      expect(grid.distinctValuesFor('category'), ['Input']);
+      expect(grid.distinctValuesFor('category').values, ['Input']);
     });
 
     test('includes null, which is a value a user filters on', () {
       final grid = productGrid();
-      expect(grid.distinctValuesFor('stock'), contains(null));
+      expect(grid.distinctValuesFor('stock').values, contains(null));
     });
 
-    test('truncates at the limit rather than materialising everything', () {
+    test('truncates at the limit, and says that it did', () {
       final grid = productGrid();
-      expect(grid.distinctValuesFor('name', limit: 2).length, 2);
+      final distinct = grid.distinctValuesFor('name', limit: 2);
+      expect(distinct.values, hasLength(2));
+      expect(distinct.truncated, isTrue);
+      // The smallest two, so the list is a prefix of the real one rather
+      // than an arbitrary sample of it.
+      final all = grid.distinctValuesFor('name').values;
+      expect(distinct.values, all.take(2));
+    });
+
+    test('is not narrowed by the column\'s own filter', () {
+      // Otherwise picking one value leaves it as the only one on offer, and
+      // the user can never add a second.
+      final grid = productGrid();
+      final before = grid.distinctValuesFor('category').values;
+      grid.setColumnFilter(
+        'category',
+        const FilterCondition(
+          field: 'category',
+          operator: FilterOperator.equals,
+          value: 'Input',
+        ),
+      );
+      expect(grid.distinctValuesFor('category').values, before);
+      // Another column's filter does narrow it.
+      grid.setColumnFilter(
+        'name',
+        const FilterCondition(
+          field: 'name',
+          operator: FilterOperator.equals,
+          value: 'Mouse',
+        ),
+      );
+      expect(grid.distinctValuesFor('category').values, ['Input']);
     });
 
     test('an unknown column is empty, not an error', () {

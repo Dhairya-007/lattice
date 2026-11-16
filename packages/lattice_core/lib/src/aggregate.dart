@@ -91,9 +91,13 @@ class Aggregation {
     if (value is int) return '$value';
     if (value is double) {
       if (value.isNaN || value.isInfinite) return '$value';
-      return value == value.roundToDouble()
+      final text = value == value.roundToDouble()
           ? value.toStringAsFixed(0)
           : value.toStringAsFixed(2);
+      // -0.001 rounds to -0.00, which reads as a negative zero: a loss that
+      // looks like a loss of nothing. Round it to plain zero.
+      if (text == '-0' || text == '-0.00') return text.substring(1);
+      return text;
     }
     return '$value';
   }
@@ -107,7 +111,16 @@ class Aggregation {
       case AggregateType.count:
         return values.length;
       case AggregateType.countDistinct:
-        return values.toSet().length;
+        // Null is the absence of a value, not a distinct one, which is what
+        // SQL's COUNT(DISTINCT col) means too. Counting it made "3 distinct
+        // categories" out of two categories and a blank.
+        var distinct = 0;
+        final seen = <Object?>{};
+        for (final value in values) {
+          if (value == null) continue;
+          if (seen.add(value)) distinct++;
+        }
+        return distinct;
       case AggregateType.sum:
         final nums = _numbers(values);
         if (nums.isEmpty) return null;
@@ -129,14 +142,21 @@ class Aggregation {
     }
   }
 
+  /// The numbers among [values], as sum and average read them.
+  ///
+  /// A string is parsed, because a column of numbers typed into a text field
+  /// is a real shape of data - but only as a finite decimal number. Text
+  /// reading `NaN` or `Infinity` used to parse into a double of that name,
+  /// and one of those in a column made every sum, average and data bar over
+  /// it NaN.
   static List<num> _numbers(List<Object?> values) {
     final out = <num>[];
     for (final v in values) {
       if (v is num) {
-        out.add(v);
+        if (v.isFinite) out.add(v);
       } else if (v is String) {
         final parsed = num.tryParse(v);
-        if (parsed != null) out.add(parsed);
+        if (parsed != null && parsed.isFinite) out.add(parsed);
       }
     }
     return out;

@@ -90,6 +90,7 @@ class ColumnStats {
     required this.count,
     required this.nullCount,
     this.sum,
+    this.numberCount = 0,
   });
 
   static const ColumnStats empty = ColumnStats(
@@ -111,10 +112,18 @@ class ColumnStats {
   /// Total of the numeric values, when the column held any.
   final num? sum;
 
+  /// How many of the values were numbers.
+  ///
+  /// Distinct from [count], which counts every non-null value: a column
+  /// holding `[10, 'n/a']` has a count of 2 and one number, and dividing the
+  /// sum by the count made its mean 5.
+  final int numberCount;
+
   num? get minNumber => min is num ? min! as num : null;
   num? get maxNumber => max is num ? max! as num : null;
 
-  num? get mean => sum == null || count == 0 ? null : sum! / count;
+  /// Mean of the *numeric* values, or null when there were none.
+  num? get mean => sum == null || numberCount == 0 ? null : sum! / numberCount;
 
   bool get isEmpty => count == 0;
 
@@ -144,6 +153,7 @@ ColumnStats computeColumnStats(Iterable<Object?> values) {
   var count = 0;
   var nullCount = 0;
   num? sum;
+  var numberCount = 0;
   for (final value in values) {
     if (value == null) {
       nullCount++;
@@ -152,7 +162,14 @@ ColumnStats computeColumnStats(Iterable<Object?> values) {
     count++;
     if (min == null || compareValues(value, min) < 0) min = value;
     if (max == null || compareValues(value, max) > 0) max = value;
-    if (value is num) sum = (sum ?? 0) + value;
+    if (value is num) {
+      // A non-finite value would make the total NaN and every data bar with
+      // it, so it counts as a value and not as a number.
+      if (value.isFinite) {
+        sum = (sum ?? 0) + value;
+        numberCount++;
+      }
+    }
   }
   return ColumnStats(
     min: min,
@@ -160,6 +177,7 @@ ColumnStats computeColumnStats(Iterable<Object?> values) {
     count: count,
     nullCount: nullCount,
     sum: sum,
+    numberCount: numberCount,
   );
 }
 

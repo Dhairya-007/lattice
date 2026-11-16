@@ -1676,9 +1676,12 @@ class GridController<T> with GridChangeNotifier {
   ColumnStats statsFor(String field) =>
       _result?.stats[field] ?? _dataSource.statsFor(field);
 
-  /// The distinct values of [field] among the matching rows, for a checkbox
-  /// filter list. Empty when the source cannot answer.
-  List<Object?> distinctValuesFor(String field, {int limit = 500}) =>
+  /// The distinct values of [field] for a checkbox filter list, computed over
+  /// the rows that match every filter except this column's own.
+  ///
+  /// Empty when the source cannot answer.
+  /// [DistinctValues.truncated] says whether there were more than [limit].
+  DistinctValues distinctValuesFor(String field, {int limit = 500}) =>
       _dataSource.distinctValuesFor(field, limit: limit);
 
   /// The filter operators worth offering for [field], most useful first.
@@ -1995,13 +1998,23 @@ class GridController<T> with GridChangeNotifier {
     final slots = <Object, int>{};
     var clipped = 0;
 
+    // A group header or a detail panel is not a row that can be written to,
+    // and the clipboard row aimed at it belongs to the next row that can:
+    // treating it as "no row here" dropped a row of the user's data in the
+    // middle of a paste, silently.
+    var cursor = target.row;
     for (var r = 0; r < block.length; r++) {
-      final rowIndex = target.row + r;
+      while (cursor < _visibleRows.length &&
+          _visibleRows[cursor] is! DataGridRow<T>) {
+        cursor++;
+      }
+      final rowIndex = cursor;
       final data = dataAt(rowIndex);
       if (data == null) {
         clipped += block[r].length;
         continue;
       }
+      cursor++;
       final identity = _identityOf(data);
       for (var c = 0; c < block[r].length; c++) {
         final columnIndex = firstColumn + c;
@@ -2279,9 +2292,24 @@ class GridController<T> with GridChangeNotifier {
     final rows = <List<String>>[];
     final range = selection.range;
 
-    List<String> cellsFor(int rowIndex, List<String> fieldSet) {
+    // A group header is not a row of data. Emitting a line of empty tabs for
+    // it put a blank row at the top of the clipboard, which pastes as a blank
+    // row; the header's own label goes in the first cell instead, which is
+    // what a spreadsheet user expects of a copied outline.
+    List<String>? cellsFor(int rowIndex, List<String> fieldSet) {
+      if (rowIndex < 0 || rowIndex >= _visibleRows.length) return null;
+      final row = _visibleRows[rowIndex];
+      if (row is GroupGridRow<T>) {
+        return [
+          '${row.label} (${row.rowCount})',
+          ...List<String>.filled(
+            fieldSet.isEmpty ? 0 : fieldSet.length - 1,
+            '',
+          ),
+        ];
+      }
       final data = dataAt(rowIndex);
-      if (data == null) return List.filled(fieldSet.length, '');
+      if (data == null) return null;
       return [for (final f in fieldSet) byField[f]?.formattedValue(data) ?? ''];
     }
 
@@ -2291,14 +2319,16 @@ class GridController<T> with GridChangeNotifier {
         rows.add([for (final f in covered) byField[f]?.title ?? f]);
       }
       for (var r = range.firstRow; r <= range.lastRow; r++) {
-        rows.add(cellsFor(r, covered));
+        final cells = cellsFor(r, covered);
+        if (cells != null) rows.add(cells);
       }
     } else {
       if (includeHeader) {
         rows.add([for (final f in fields) byField[f]?.title ?? f]);
       }
       for (final index in selection.selectedRows) {
-        rows.add(cellsFor(index, fields));
+        final cells = cellsFor(index, fields);
+        if (cells != null) rows.add(cells);
       }
     }
     return toClipboardText<T>(rows);

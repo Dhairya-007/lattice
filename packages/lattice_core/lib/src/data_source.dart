@@ -1,6 +1,8 @@
 /// Data sources: the seam between the grid and wherever rows come from.
 library;
 
+import 'dart:collection';
+
 import 'aggregate.dart';
 import 'column.dart';
 import 'compare.dart';
@@ -296,15 +298,21 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
     );
   }
 
-  /// The distinct values of [field] among the rows that currently match, in
-  /// ascending order, for a checkbox filter list.
+  /// The distinct values of [field] for a checkbox filter list.
   ///
-  /// Returns an empty list when the source cannot answer cheaply, which an
-  /// adapter reads as "offer a text filter instead" rather than as "this
-  /// column is empty". [limit] caps the list: a value picker over a
+  /// Returns [DistinctValues.none] when the source cannot answer cheaply,
+  /// which an adapter reads as "offer a text filter instead" rather than as
+  /// "this column is empty". [limit] caps the list: a value picker over a
   /// high-cardinality column is unusable anyway, and a source should not
-  /// materialise a million strings to be told so.
-  List<Object?> distinctValuesFor(String field, {int limit = 500}) => const [];
+  /// materialise a million strings to be told so - [DistinctValues.truncated]
+  /// says whether it had to stop.
+  ///
+  /// The values are computed over the rows that match every *other* filter,
+  /// not over the rows that match this column's own: a list narrowed by the
+  /// column's own filter offers only the values already picked, so a user who
+  /// chooses "Input" can never add "Display" to the selection.
+  DistinctValues distinctValuesFor(String field, {int limit = 500}) =>
+      DistinctValues.none;
 
   /// Every row this source holds, or null when it cannot say.
   ///
@@ -318,6 +326,34 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
 
   /// Tells the grid to re-run its current query, e.g. after a write.
   void invalidate() => notifyListeners();
+}
+
+/// The distinct values of one column, and whether there are more.
+///
+/// A plain list could not say: the list was read one value over the limit so
+/// that a caller could tell, and then cut back to the limit before it was
+/// returned, which threw away the only evidence. A checkbox filter list that
+/// cannot tell a complete list from a truncated one shows the user a set of
+/// values and lets them believe it is all of them.
+class DistinctValues {
+  const DistinctValues(this.values, {this.truncated = false});
+
+  /// Nothing to offer, from a source that cannot answer.
+  static const DistinctValues none = DistinctValues([]);
+
+  /// The values, ascending. A truncated list holds the smallest ones.
+  final List<Object?> values;
+
+  /// Whether the column holds more values than the limit allowed.
+  final bool truncated;
+
+  bool get isEmpty => values.isEmpty;
+  bool get isNotEmpty => values.isNotEmpty;
+  int get length => values.length;
+
+  @override
+  String toString() =>
+      'DistinctValues(${values.length}${truncated ? '+' : ''})';
 }
 
 /// Serves rows from a list already in memory.
@@ -498,6 +534,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   /// page only re-slices, and reversing a sort does not re-filter.
   @override
   GridResult<T> fetchSync(GridQuery query) {
+    _lastQuery = query;
     final total = _rows.length;
     final matched = _matchedFor(query);
     final ordered = _orderedFor(query, matched);
@@ -672,17 +709,29 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   }
 
   String _distinctKey = '';
-  final Map<String, List<Object?>> _distinct = {};
+  final Map<String, DistinctValues> _distinct = {};
 
-  /// The distinct values of [field] among the rows that currently match.
+  /// The last query this source resolved, so a distinct-value list knows
+  /// which filters to leave out.
+  GridQuery? _lastQuery;
+
+  /// The distinct values of [field] among the rows that match every filter
+  /// except this column's own.
   ///
   /// Cached exactly as [statsFor] is, and for the same reason: a checkbox
   /// filter list is rebuilt every time the menu opens, and scanning a column
-  /// per frame is not affordable. Truncated at [limit], in which case the
-  /// list is the first [limit] values in ascending order.
+  /// per frame is not affordable.
+  ///
+  /// Three things used to be wrong with it. The list was cut back to [limit]
+  /// after being read one over, so a truncated list was indistinguishable
+  /// from a complete one. The values kept were the first ones *seen* rather
+  /// than the smallest, so a truncated list was an arbitrary sample shown in
+  /// sorted order. And the rows scanned were the ones matching every filter
+  /// including this column's, so picking a value left that value as the only
+  /// one on offer.
   @override
-  List<Object?> distinctValuesFor(String field, {int limit = 500}) {
-    final key = '$revision\u0000$_matchedKey\u0000$limit';
+  DistinctValues distinctValuesFor(String field, {int limit = 500}) {
+    final key = '$revision\u0000$_distinctScopeKey\u0000$limit';
     if (_distinctKey != key) {
       _distinct.clear();
       _distinctKey = key;
@@ -691,22 +740,59 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     if (cached != null) return cached;
 
     final column = columns[field];
-    if (column == null) return const [];
-    final rows =
-        _matchedRows.isEmpty && _matchedKey.isEmpty ? _rows : _matchedRows;
-    final seen = <Object?>{};
-    for (final row in rows) {
-      seen.add(column.value(row));
-      // One over the limit, so a caller can tell a truncated list from a
-      // complete one by its length.
-      if (seen.length > limit) break;
+    if (column == null) return DistinctValues.none;
+
+    // A sorted set bounded at [limit]: the largest value is dropped as soon
+    // as one too many arrives, so what survives is the smallest [limit]
+    // values and the list is a prefix of the real one. Stopping the scan
+    // early instead bounded the time and gave back an arbitrary sample shown
+    // in sorted order, which reads exactly like a complete list. The limit
+    // bounds what is held, not what is read.
+    final seen = SplayTreeSet<Object?>(compareValues);
+    var truncated = false;
+    for (final row in _rowsForDistinct(field)) {
+      final value = column.value(row);
+      if (seen.contains(value)) continue;
+      seen.add(value);
+      if (seen.length > limit) {
+        seen.remove(seen.last);
+        truncated = true;
+      }
     }
-    final values = seen.toList()..sort(compareValues);
-    final out = List<Object?>.unmodifiable(
-      values.length > limit ? values.sublist(0, limit) : values,
+    final out = DistinctValues(
+      List<Object?>.unmodifiable(seen),
+      truncated: truncated,
     );
     _distinct[field] = out;
     return out;
+  }
+
+  /// The rows a distinct-value list for [field] is computed over: those that
+  /// match the rest of the query, with any condition on [field] itself left
+  /// out.
+  Iterable<T> _rowsForDistinct(String field) {
+    final query = _lastQuery;
+    if (query == null) return _rows;
+    final filter = pruneFilter(query.filter, (f) => f != field);
+    final needle = query.needle;
+    if (filter == null && needle.isEmpty) return _rows;
+    final compiled = filter?.compile(types: columnTypes);
+    final index =
+        needle.isEmpty ? null : _searchIndexFor(_searchFieldsFor(query));
+    return [
+      for (var i = 0; i < _rows.length; i++)
+        if (index == null || index[i].contains(needle))
+          if (compiled == null ||
+              compiled.test((f) => columns[f]?.value(_rows[i])))
+            _rows[i],
+    ];
+  }
+
+  /// Identity of the scope a distinct-value list is computed over.
+  String get _distinctScopeKey {
+    final query = _lastQuery;
+    if (query == null) return '';
+    return '${query.filter?.fingerprint ?? ''}\u0000${query.needle}';
   }
 
   // -- The search index -----------------------------------------------------
