@@ -289,6 +289,13 @@ class GridController<T> with GridChangeNotifier {
   /// Error thrown by the last fetch, if it failed.
   Object? get error => _error;
 
+  /// Whether the rows on screen are left over from before a failed fetch.
+  ///
+  /// Only ever true with [keepRowsOnError] set, which is the mode that asks
+  /// for exactly that. Without it a failed fetch clears the result, so the
+  /// counts and aggregates cannot go on describing rows that are gone.
+  bool get isStale => _error != null && _result != null;
+
   bool get isGrouped => _groups.isNotEmpty;
 
   bool get isEmpty => !_loading && _visibleRows.isEmpty;
@@ -301,9 +308,15 @@ class GridController<T> with GridChangeNotifier {
   int? get pageSize => _pageSize;
   int get pageIndex => _pageIndex;
 
+  /// How many pages the current result has.
+  ///
+  /// Always 1 while grouped: grouping needs every matching row, because a
+  /// header counts its group, so [query] asks for all of them and paging has
+  /// nothing to turn. Advertising three pages that `nextPage` could not turn
+  /// was worse than saying there is one.
   int get pageCount {
     final size = _pageSize;
-    if (size == null || size <= 0) return 1;
+    if (size == null || size <= 0 || isGrouped) return 1;
     final count = (matchedCount / size).ceil();
     return count < 1 ? 1 : count;
   }
@@ -407,7 +420,16 @@ class GridController<T> with GridChangeNotifier {
     }
     _debounceTimer?.cancel();
     _debounceTimer = null;
-    return _fetch();
+    // A direct refresh answers the coalesced one too. Cancelling the timer
+    // without completing the future left every caller awaiting the debounced
+    // refresh hanging forever.
+    final pending = _debounced;
+    _debounced = null;
+    final fetch = _fetch();
+    if (pending == null) return fetch;
+    return fetch.whenComplete(() {
+      if (!pending.isCompleted) pending.complete();
+    });
   }
 
   Timer? _debounceTimer;
@@ -477,6 +499,14 @@ class GridController<T> with GridChangeNotifier {
   /// accumulated and ask again - belongs here.
   Future<void> reload() {
     if (isInfinite) _loadedCount = loadMoreSize!;
+    // Everything fetched a piece at a time is refetched too, keeping which
+    // branches and groups are open: reload used to leave a lazy tree showing
+    // the children it had already loaded, whatever the server now held.
+    _loadedGroups.clear();
+    _groupErrors.clear();
+    _loadingGroups.clear();
+    _loadedChildren.clear();
+    _childErrors.clear();
     _dataSource.bumpRevision();
     return refresh();
   }
@@ -511,21 +541,46 @@ class GridController<T> with GridChangeNotifier {
       if (token != _fetchToken || isDisposed) return;
       _loading = false;
       // The groups the source just sent supersede anything cached for the
-      // query they replace.
+      // query they replace - including loads still in flight, which answer
+      // the query the user has moved on from.
       _loadedGroups.clear();
       _groupErrors.clear();
+      _loadingGroups.clear();
       _apply(result);
-    } on FetchCancelled {
-      // A cancelled fetch has no answer and is not a failure: the refresh
-      // that replaced it owns the state now.
-      return;
+    } on FetchCancelled catch (error) {
+      // A fetch the grid itself cancelled has no answer and is not a failure:
+      // the refresh that replaced it owns the state now. One the grid did
+      // *not* cancel is a real failure dressed as a cancellation - a source
+      // that maps an aborted HTTP call onto FetchCancelled - and swallowing
+      // it left the spinner running for good.
+      if (token != _fetchToken || isDisposed) return;
+      if (signal.isCancelled) return;
+      _loading = false;
+      _error = error;
+      if (!keepRowsOnError) _clearResult();
+      notifyListeners(changes: const {GridChange.rows, GridChange.status});
     } catch (error) {
       if (token != _fetchToken || isDisposed) return;
       _loading = false;
       _error = error;
-      if (!keepRowsOnError) _visibleRows = const [];
+      if (!keepRowsOnError) _clearResult();
       notifyListeners(changes: const {GridChange.rows, GridChange.status});
     }
+  }
+
+  /// Forgets the last result, so nothing describes rows that are not shown.
+  ///
+  /// A failed fetch used to empty the rows and keep `_result`, so the footer
+  /// still read "6 rows" and the aggregates still summed the rows that had
+  /// just disappeared.
+  /// Guards the re-slice in [_apply] against recursion.
+  bool _reslicing = false;
+
+  void _clearResult() {
+    _result = null;
+    _visibleRows = const [];
+    _loadedGroups.clear();
+    _loadingGroups.clear();
   }
 
   void _apply(GridResult<T> result) {
@@ -534,7 +589,30 @@ class GridController<T> with GridChangeNotifier {
     final tracked = _trackedRowKeys();
 
     _result = result;
-    _visibleRows = _rowsFor(result);
+
+    // The page the user is on may no longer exist: rows removed elsewhere, or
+    // a filter that now matches less, left pageIndex past pageCount and the
+    // grid showing nothing at all while rows sat on an earlier page. A
+    // synchronous source can re-slice now; a remote one is asked again.
+    var applied = result;
+    final lastPage = pageCount - 1;
+    if (_pageIndex > lastPage) {
+      _pageIndex = lastPage < 0 ? 0 : lastPage;
+      if (_dataSource.isSynchronous && !_reslicing) {
+        _reslicing = true;
+        try {
+          applied = _dataSource.fetchSync(query);
+          _result = applied;
+        } finally {
+          _reslicing = false;
+        }
+      } else if (!_reslicing) {
+        scheduleMicrotask(() {
+          if (!isDisposed) refresh();
+        });
+      }
+    }
+    _visibleRows = _rowsFor(applied);
 
     if (tracked != null) {
       final positions = _rowPositions();
@@ -644,21 +722,34 @@ class GridController<T> with GridChangeNotifier {
 
   Future<void> _loadGroup(GroupNode<T> node) async {
     final source = _dataSource;
-    final pending = query;
+    final generation = _sourceGeneration;
+    final token = _fetchToken;
+    final signal = FetchSignal();
+    final pending = query.copyWith(signal: signal);
     try {
       final children = await source.fetchGroupChildren(pending, node);
-      if (isDisposed || source != _dataSource) return;
+      // The answer describes the query that asked for it. A search or a
+      // filter that landed while this was in flight makes it an answer to a
+      // question nobody is asking any more, and grafting it onto the new
+      // headers showed pre-search rows after the search.
+      if (isDisposed ||
+          source != _dataSource ||
+          generation != _sourceGeneration ||
+          token != _fetchToken) {
+        return;
+      }
       _loadedGroups[node.path] = children;
     } on FetchCancelled {
       return;
     } catch (error) {
-      if (isDisposed) return;
+      if (isDisposed || generation != _sourceGeneration) return;
+      if (token != _fetchToken) return;
       // A group that would not load is a failure of this group, not of the
       // grid: the other groups are still good.
       _groupErrors[node.path] = error;
     } finally {
       _loadingGroups.remove(node.path);
-      if (!isDisposed) _rebuildRows();
+      if (!isDisposed && generation == _sourceGeneration) _rebuildRows();
     }
   }
 
@@ -985,19 +1076,20 @@ class GridController<T> with GridChangeNotifier {
     Object key,
     Future<List<T>> Function(T row) loader,
   ) async {
+    final generation = _sourceGeneration;
     try {
       final children = await loader(row);
-      if (isDisposed) return;
+      if (isDisposed || generation != _sourceGeneration) return;
       _loadedChildren[key] = children;
     } on FetchCancelled {
       return;
     } catch (error) {
-      if (isDisposed) return;
+      if (isDisposed || generation != _sourceGeneration) return;
       // One branch that would not load is not a failure of the grid.
       _childErrors[key] = error;
     } finally {
-      _loadingChildren.remove(key);
-      if (!isDisposed) _reapply();
+      if (generation == _sourceGeneration) _loadingChildren.remove(key);
+      if (!isDisposed && generation == _sourceGeneration) _reapply();
     }
   }
 
@@ -2020,19 +2112,48 @@ class GridController<T> with GridChangeNotifier {
   }
 
   /// Swaps the data source, e.g. from a local list to a server-backed one.
+  ///
+  /// Everything derived from the old source is dropped: its lazily loaded
+  /// groups and tree children, the errors they reported, writes still in
+  /// flight, which detail panels were open, and the undo history - whose
+  /// actions name rows this source has never heard of. A loader started for
+  /// the old source checks the generation before it answers, so a reply that
+  /// is already in the air cannot graft the old data onto the new source.
   void setDataSource(LatticeDataSource<T> source) {
     _dataSource.removeListener(_onSourceChanged);
+    _sourceGeneration++;
     _dataSource = source;
     _dataSource.columns = columnsByField;
     _dataSource.addListener(_onSourceChanged);
+    _loadedGroups.clear();
+    _groupErrors.clear();
+    _loadingGroups.clear();
+    _loadedChildren.clear();
+    _loadingChildren.clear();
+    _childErrors.clear();
+    _openDetails.clear();
+    _pendingWrites.clear();
+    _writeError = null;
+    _history.clear();
+    _cancelFetch('the data source was replaced');
     _resetPaging();
     refresh();
   }
+
+  /// Bumped by [setDataSource], so an in-flight loader can tell whether the
+  /// source it was started for is still the one on screen.
+  int _sourceGeneration = 0;
 
   @override
   void dispose() {
     _debounceTimer?.cancel();
     _debounceTimer = null;
+    // A caller awaiting a debounced refresh is owed an answer even when the
+    // answer is "never": leaving the completer pending hung that caller for
+    // the life of the isolate and leaked the test that wrote it.
+    final pending = _debounced;
+    _debounced = null;
+    if (pending != null && !pending.isCompleted) pending.complete();
     _cancelFetch('the grid was disposed');
     _dataSource.removeListener(_onSourceChanged);
     super.dispose();
