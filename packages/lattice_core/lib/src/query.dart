@@ -2,6 +2,7 @@
 library;
 
 import 'aggregate.dart';
+import 'compare.dart';
 import 'decoration.dart';
 import 'fetch.dart';
 import 'schema.dart';
@@ -67,11 +68,12 @@ class GridQuery {
   /// describes one attempt, not what the grid wants to show.
   final FetchSignal? signal;
 
-  /// The search text as matching actually uses it: trimmed and lowercased.
+  /// The search text as matching actually uses it: trimmed, lowercased and
+  /// with diacritics folded away, so that typing `creme` finds `Crème`.
   ///
   /// Defined here rather than in each source, so that a source and the cache
   /// key it stores a result under cannot disagree about what was searched for.
-  String get needle => search.trim().toLowerCase();
+  String get needle => foldText(search.trim());
 
   // -- Cache identity -------------------------------------------------------
   //

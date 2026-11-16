@@ -1,6 +1,8 @@
 /// Declarative, serialisable filter model.
 library;
 
+import 'dart:collection';
+
 import 'column.dart';
 import 'compare.dart';
 
@@ -175,11 +177,34 @@ sealed class Filter {
   /// Fields referenced anywhere in this subtree.
   Set<String> get fields;
 
+  /// Prepares this filter to be run over many rows.
+  ///
+  /// Everything that depends only on the filter - folding a needle, building
+  /// a set out of an `isIn` list, coercing an operand to the column's type -
+  /// happens once here instead of once per row. [matchesRow] stays correct on
+  /// its own for a one-off test; a pipeline that walks 50k rows compiles
+  /// first, which is what turns `isIn` over 1,000 values from 1.9s into a
+  /// hash lookup per row.
+  ///
+  /// [types] maps a field to its [ColumnType], so that a `'50'` typed into a
+  /// number column's filter compares as 50 rather than as text. A field
+  /// missing from the map is left uncoerced.
+  CompiledFilter compile({Map<String, ColumnType> types = const {}});
+
   Map<String, Object?> toJson();
 
   /// Rebuilds a filter tree produced by [toJson].
-  static Filter fromJson(Map<String, Object?> json) {
-    if (json['join'] != null) return FilterGroup.fromJson(json);
+  ///
+  /// [warnings], when given, collects a line per child that could not be
+  /// read instead of failing the whole tree; a malformed *leaf* still throws
+  /// a [FormatException], which is what the group above it catches.
+  static Filter fromJson(
+    Map<String, Object?> json, {
+    List<String>? warnings,
+  }) {
+    if (json['join'] != null) {
+      return FilterGroup.fromJson(json, warnings: warnings);
+    }
     return FilterCondition.fromJson(json);
   }
 }
@@ -192,6 +217,7 @@ class FilterCondition extends Filter {
     this.value,
     this.secondValue,
     this.caseSensitive = false,
+    this.dateOnly = false,
   });
 
   final String field;
@@ -206,6 +232,15 @@ class FilterCondition extends Filter {
   /// Whether text comparisons respect case. Defaults to case-insensitive,
   /// which is what users expect of a filter row.
   final bool caseSensitive;
+
+  /// Whether a [DateTime] comparison ignores the time of day.
+  ///
+  /// `equals` against a date column otherwise needs the exact instant, so
+  /// "orders on 1 June" matched nothing unless every row happened to be
+  /// stamped midnight. With this set, both sides are truncated to their
+  /// calendar day before comparing, which also makes `between` cover both
+  /// of its end days.
+  final bool dateOnly;
 
   @override
   Set<String> get fields => {field};
@@ -223,15 +258,21 @@ class FilterCondition extends Filter {
       case FilterOperator.between:
         return value == null || secondValue == null;
       case FilterOperator.isIn:
-        return value == null || (value as Iterable).isEmpty;
+        // A value that is not a list at all is a malformed condition, not a
+        // condition that hides every row: restoring a corrupt saved view
+        // used to throw from here.
+        final values = value;
+        if (values is Iterable) return values.isEmpty;
+        return true;
       default:
         return value == null || (value is String && (value as String).isEmpty);
     }
   }
 
   @override
-  String get fingerprint =>
-      '$field|${operator.name}|$value|$secondValue|$caseSensitive';
+  String get fingerprint => '$field|${operator.name}|'
+      '${value is Iterable ? (value as Iterable).join('\u0001') : value}|'
+      '$secondValue|$caseSensitive|$dateOnly';
 
   @override
   bool matchesRow(Object? Function(String field) read) {
@@ -260,10 +301,16 @@ class FilterCondition extends Filter {
         return actual != null && _compare(actual, value) <= 0;
       case FilterOperator.between:
         if (actual == null) return false;
-        return _compare(actual, value) >= 0 &&
-            _compare(actual, secondValue) <= 0;
+        // A range typed backwards is still a range. Comparing against the
+        // bounds in the order they were given matched nothing at all, which
+        // reads as "no rows" rather than as "you typed it the other way".
+        final low = _compare(value, secondValue) <= 0 ? value : secondValue;
+        final high = _compare(value, secondValue) <= 0 ? secondValue : value;
+        return _compare(actual, low) >= 0 && _compare(actual, high) <= 0;
       case FilterOperator.isIn:
-        return (value as Iterable).any((v) => _compare(actual, v) == 0);
+        final values = value;
+        if (values is! Iterable) return true;
+        return values.any((v) => _compare(actual, v) == 0);
       case FilterOperator.isNull:
         return actual == null;
       case FilterOperator.isNotNull:
@@ -275,12 +322,29 @@ class FilterCondition extends Filter {
     }
   }
 
-  int _compare(Object? a, Object? b) =>
-      caseSensitive ? compareValues(a, b) : compareValuesCaseInsensitive(a, b);
+  @override
+  CompiledFilter compile({Map<String, ColumnType> types = const {}}) =>
+      compileCondition(this, types[field]);
+
+  /// Compares two operands the way this condition's flags ask for.
+  ///
+  /// A case-insensitive comparison must *not* break a folded tie with the
+  /// exact comparison the way a sort does: `equals: 'apple'` against
+  /// `'Apple'` is a match, and a `>=` that calls two values equal and then
+  /// excludes one of them is simply wrong.
+  int _compare(Object? a, Object? b) {
+    if (dateOnly && (a is DateTime || b is DateTime)) {
+      return compareValues(_truncate(a), _truncate(b));
+    }
+    return caseSensitive ? compareValues(a, b) : compareValuesFolded(a, b);
+  }
+
+  static Object? _truncate(Object? value) =>
+      value is DateTime ? DateTime(value.year, value.month, value.day) : value;
 
   String _text(Object? v) {
     final s = v == null ? '' : '$v';
-    return caseSensitive ? s : s.toLowerCase();
+    return caseSensitive ? s : foldText(s);
   }
 
   FilterCondition copyWith({
@@ -289,6 +353,7 @@ class FilterCondition extends Filter {
     Object? value = _unset,
     Object? secondValue = _unset,
     bool? caseSensitive,
+    bool? dateOnly,
   }) {
     return FilterCondition(
       field: field ?? this.field,
@@ -296,30 +361,58 @@ class FilterCondition extends Filter {
       value: value == _unset ? this.value : value,
       secondValue: secondValue == _unset ? this.secondValue : secondValue,
       caseSensitive: caseSensitive ?? this.caseSensitive,
+      dateOnly: dateOnly ?? this.dateOnly,
     );
   }
 
+  /// JSON for a saved view.
+  ///
+  /// Operands carry their type: a [DateTime] is written as
+  /// `{"$date": "<iso>"}` and a [BigInt] as `{"$bigint": "<digits>"}`.
+  /// Writing a `DateTime` straight through made `jsonEncode` throw, and
+  /// writing it as a bare string made the operand come back as text, so a
+  /// restored date filter compared instants against ISO strings and matched
+  /// the wrong rows.
   @override
   Map<String, Object?> toJson() => {
         'field': field,
         'op': operator.name,
-        if (value != null)
-          'value': value is Iterable ? (value as Iterable).toList() : value,
-        if (secondValue != null) 'secondValue': secondValue,
+        if (value != null) 'value': encodeFilterOperand(value),
+        if (secondValue != null)
+          'secondValue': encodeFilterOperand(secondValue),
         if (caseSensitive) 'caseSensitive': true,
+        if (dateOnly) 'dateOnly': true,
       };
 
+  /// Rebuilds a condition produced by [toJson].
+  ///
+  /// Throws a [FormatException] for a document this cannot read, rather than
+  /// a [TypeError] from a null check: a corrupt saved view is a document the
+  /// caller can report on, not a crash.
   static FilterCondition fromJson(Map<String, Object?> json) {
+    final field = json['field'];
+    if (field is! String || field.isEmpty) {
+      throw FormatException('A filter needs a non-empty "field"', json);
+    }
+    final name = json['op'];
+    final operator = FilterOperator.values.firstWhere(
+      (o) => o.name == name,
+      orElse: () =>
+          throw FormatException('Unknown filter operator: $name', json),
+    );
+    var value = decodeFilterOperand(json['value']);
+    if (operator == FilterOperator.isIn && value != null && value is! List) {
+      // One value where a list belongs is readable: treat it as a set of one
+      // rather than refusing the whole view.
+      value = [value];
+    }
     return FilterCondition(
-      field: json['field']! as String,
-      operator: FilterOperator.values.firstWhere(
-        (o) => o.name == json['op'],
-        orElse: () =>
-            throw ArgumentError('Unknown filter operator ${json['op']}'),
-      ),
-      value: json['value'],
-      secondValue: json['secondValue'],
+      field: field,
+      operator: operator,
+      value: value,
+      secondValue: decodeFilterOperand(json['secondValue']),
       caseSensitive: json['caseSensitive'] == true,
+      dateOnly: json['dateOnly'] == true,
     );
   }
 
@@ -328,13 +421,40 @@ class FilterCondition extends Filter {
       other is FilterCondition &&
       other.field == field &&
       other.operator == operator &&
-      other.value == value &&
-      other.secondValue == secondValue &&
-      other.caseSensitive == caseSensitive;
+      _operandsEqual(other.value, value) &&
+      _operandsEqual(other.secondValue, secondValue) &&
+      other.caseSensitive == caseSensitive &&
+      other.dateOnly == dateOnly;
 
   @override
-  int get hashCode =>
-      Object.hash(field, operator, value, secondValue, caseSensitive);
+  int get hashCode => Object.hash(
+        field,
+        operator,
+        value is Iterable ? Object.hashAll(value as Iterable) : value,
+        secondValue,
+        caseSensitive,
+        dateOnly,
+      );
+
+  /// Two operands are the same when they are equal, or when both are lists of
+  /// equal values.
+  ///
+  /// An `isIn` condition holds a list, and two lists with the same contents
+  /// are not `==` in Dart - so two conditions that select exactly the same
+  /// rows compared unequal, which defeated every cache keyed on a filter and
+  /// made the filter row rebuild on every keystroke.
+  static bool _operandsEqual(Object? a, Object? b) {
+    if (a is Iterable && b is Iterable) {
+      final left = a.toList();
+      final right = b.toList();
+      if (left.length != right.length) return false;
+      for (var i = 0; i < left.length; i++) {
+        if (left[i] != right[i]) return false;
+      }
+      return true;
+    }
+    return a == b;
+  }
 
   @override
   String toString() => '$field ${operator.name} $value';
@@ -374,23 +494,367 @@ class FilterGroup extends Filter {
   }
 
   @override
+  CompiledFilter compile({Map<String, ColumnType> types = const {}}) {
+    if (children.isEmpty) return const _AlwaysTrue();
+    final compiled = [for (final c in children) c.compile(types: types)];
+    return join == FilterJoin.and
+        ? _CompiledAnd(compiled)
+        : _CompiledOr(compiled);
+  }
+
+  @override
   Map<String, Object?> toJson() => {
         'join': join.name,
         'children': children.map((c) => c.toJson()).toList(),
       };
 
-  static FilterGroup fromJson(Map<String, Object?> json) {
+  /// Rebuilds a group produced by [toJson], skipping children it cannot read.
+  ///
+  /// A saved view is a user's own work read back by a later build, so one
+  /// unreadable condition drops out of the tree rather than taking the whole
+  /// view with it. [warnings], when given, collects what was skipped.
+  static FilterGroup fromJson(
+    Map<String, Object?> json, {
+    List<String>? warnings,
+  }) {
+    final raw = json['children'];
+    final children = <Filter>[];
+    if (raw is List) {
+      for (final child in raw) {
+        if (child is! Map) {
+          warnings?.add('A filter child that is not an object was skipped.');
+          continue;
+        }
+        try {
+          children.add(
+            Filter.fromJson(
+              child.cast<String, Object?>(),
+              warnings: warnings,
+            ),
+          );
+        } on FormatException catch (e) {
+          warnings?.add('A filter was skipped: ${e.message}');
+        }
+      }
+    }
     return FilterGroup(
-      ((json['children'] ?? const []) as List)
-          .cast<Map<String, Object?>>()
-          .map(Filter.fromJson)
-          .toList(),
+      children,
       join: json['join'] == 'or' ? FilterJoin.or : FilterJoin.and,
     );
   }
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! FilterGroup) return false;
+    if (other.join != join || other.children.length != children.length) {
+      return false;
+    }
+    for (var i = 0; i < children.length; i++) {
+      if (other.children[i] != children[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(join, Object.hashAll(children));
 
   @override
   String toString() => '(${children.join(' ${join.name.toUpperCase()} ')})';
 }
 
 const Object _unset = Object();
+
+// -- Compiled filters --------------------------------------------------------
+//
+// A filter is written once by the user and then run over every row, so every
+// decision that depends only on the filter belongs here rather than in the
+// inner loop: folding the needle, coercing the operand to the column's type,
+// and - the one that mattered most - turning an `isIn` list into a hash set.
+// A checkbox filter list over a thousand values was O(rows x values).
+
+/// A [Filter] prepared to be run over many rows.
+///
+/// Obtained from [Filter.compile]. Immutable and safe to keep for as long as
+/// the filter and the column types stand.
+abstract class CompiledFilter {
+  const CompiledFilter();
+
+  /// Whether a row satisfies the filter, reading values through [read].
+  bool test(Object? Function(String field) read);
+
+  /// Whether this filter lets every row through, so a caller can skip it.
+  bool get isPassThrough => false;
+}
+
+class _AlwaysTrue extends CompiledFilter {
+  const _AlwaysTrue();
+
+  @override
+  bool test(Object? Function(String field) read) => true;
+
+  @override
+  bool get isPassThrough => true;
+}
+
+class _CompiledAnd extends CompiledFilter {
+  _CompiledAnd(this.children);
+
+  final List<CompiledFilter> children;
+
+  @override
+  bool test(Object? Function(String field) read) {
+    for (var i = 0; i < children.length; i++) {
+      if (!children[i].test(read)) return false;
+    }
+    return true;
+  }
+}
+
+class _CompiledOr extends CompiledFilter {
+  _CompiledOr(this.children);
+
+  final List<CompiledFilter> children;
+
+  @override
+  bool test(Object? Function(String field) read) {
+    for (var i = 0; i < children.length; i++) {
+      if (children[i].test(read)) return true;
+    }
+    return false;
+  }
+}
+
+class _CompiledPredicate extends CompiledFilter {
+  _CompiledPredicate(this.field, this.predicate);
+
+  final String field;
+  final bool Function(Object? actual) predicate;
+
+  @override
+  bool test(Object? Function(String field) read) => predicate(read(field));
+}
+
+/// Compiles one condition, coercing its operands to [type] when it is known.
+///
+/// Exposed for a data source that compiles conditions itself; most callers
+/// want [Filter.compile].
+CompiledFilter compileCondition(FilterCondition condition, ColumnType? type) {
+  if (condition.isEmpty) return const _AlwaysTrue();
+  final field = condition.field;
+  final folded = !condition.caseSensitive;
+  final dateOnly = condition.dateOnly;
+
+  Object? coerce(Object? operand) =>
+      coerceFilterOperand(operand, type, dateOnly: dateOnly);
+
+  int compare(Object? a, Object? b) {
+    if (dateOnly && (a is DateTime || b is DateTime)) {
+      return compareValues(_dateOnly(a), _dateOnly(b));
+    }
+    return folded ? compareValuesFolded(a, b) : compareValues(a, b);
+  }
+
+  Object? normalise(Object? value) =>
+      dateOnly && value is DateTime ? _dateOnly(value) : value;
+
+  final operand = coerce(condition.value);
+  final second = coerce(condition.secondValue);
+
+  switch (condition.operator) {
+    case FilterOperator.equals:
+      return _CompiledPredicate(field, (a) => compare(a, operand) == 0);
+    case FilterOperator.notEquals:
+      return _CompiledPredicate(field, (a) => compare(a, operand) != 0);
+    case FilterOperator.contains:
+      final needle = _textOf(operand, folded);
+      return _CompiledPredicate(
+        field,
+        (a) => _textOf(a, folded).contains(needle),
+      );
+    case FilterOperator.notContains:
+      final needle = _textOf(operand, folded);
+      return _CompiledPredicate(
+        field,
+        (a) => !_textOf(a, folded).contains(needle),
+      );
+    case FilterOperator.startsWith:
+      final needle = _textOf(operand, folded);
+      return _CompiledPredicate(
+        field,
+        (a) => _textOf(a, folded).startsWith(needle),
+      );
+    case FilterOperator.endsWith:
+      final needle = _textOf(operand, folded);
+      return _CompiledPredicate(
+        field,
+        (a) => _textOf(a, folded).endsWith(needle),
+      );
+    case FilterOperator.greaterThan:
+      return _CompiledPredicate(
+        field,
+        (a) => a != null && compare(a, operand) > 0,
+      );
+    case FilterOperator.greaterOrEqual:
+      return _CompiledPredicate(
+        field,
+        (a) => a != null && compare(a, operand) >= 0,
+      );
+    case FilterOperator.lessThan:
+      return _CompiledPredicate(
+        field,
+        (a) => a != null && compare(a, operand) < 0,
+      );
+    case FilterOperator.lessOrEqual:
+      return _CompiledPredicate(
+        field,
+        (a) => a != null && compare(a, operand) <= 0,
+      );
+    case FilterOperator.between:
+      // Bounds typed backwards still describe the same range.
+      final ordered = compare(operand, second) <= 0;
+      final low = ordered ? operand : second;
+      final high = ordered ? second : operand;
+      return _CompiledPredicate(
+        field,
+        (a) => a != null && compare(a, low) >= 0 && compare(a, high) <= 0,
+      );
+    case FilterOperator.isIn:
+      final raw = condition.value;
+      if (raw is! Iterable) return const _AlwaysTrue();
+      // The whole point of compiling: one hash lookup per row instead of a
+      // walk over every selected value.
+      final keys = HashSet<Object?>();
+      for (final value in raw) {
+        keys.add(_setKey(normalise(coerce(value)), folded));
+      }
+      return _CompiledPredicate(
+        field,
+        (a) => keys.contains(_setKey(normalise(a), folded)),
+      );
+    case FilterOperator.isNull:
+      return _CompiledPredicate(field, (a) => a == null);
+    case FilterOperator.isNotNull:
+      return _CompiledPredicate(field, (a) => a != null);
+    case FilterOperator.isEmpty:
+      return _CompiledPredicate(
+        field,
+        (a) => a == null || _textOf(a, false).isEmpty,
+      );
+    case FilterOperator.isNotEmpty:
+      return _CompiledPredicate(
+        field,
+        (a) => a != null && _textOf(a, false).isNotEmpty,
+      );
+  }
+}
+
+DateTime? _dateOnly(Object? value) =>
+    value is DateTime ? DateTime(value.year, value.month, value.day) : null;
+
+String _textOf(Object? value, bool folded) {
+  final text = value == null ? '' : '$value';
+  return folded ? foldText(text) : text;
+}
+
+/// A hash key under which two values that a filter calls equal are the same.
+///
+/// `5` and `5.0` are one value, `'Apple'` and `'apple'` are one value when
+/// the filter folds case, and a [DateTime] keys on its instant.
+Object? _setKey(Object? value, bool folded) {
+  if (value == null) return null;
+  if (value is String) return folded ? foldText(value) : value;
+  if (value is num) return value.toDouble();
+  if (value is BigInt) return value.toDouble();
+  if (value is DateTime) return value.microsecondsSinceEpoch;
+  if (value is bool) return value;
+  return '$value';
+}
+
+/// Coerces a filter operand to the type of the column it tests.
+///
+/// A filter row hands back whatever the user typed, so a number column's
+/// filter arrived holding `'50'` and compared as text - `'100' < '50'`. A
+/// date restored from a saved view written by an older build arrives as an
+/// ISO string for the same reason. Anything that cannot be read as [type] is
+/// returned unchanged, so a text column is never second-guessed.
+Object? coerceFilterOperand(
+  Object? operand,
+  ColumnType? type, {
+  bool dateOnly = false,
+}) {
+  if (operand == null || type == null) return operand;
+  switch (type) {
+    case ColumnType.number:
+      if (operand is num || operand is BigInt) return operand;
+      if (operand is String) {
+        final parsed = num.tryParse(operand.trim());
+        return parsed ?? operand;
+      }
+      return operand;
+    case ColumnType.date:
+      if (operand is DateTime) {
+        return dateOnly ? _dateOnly(operand) : operand;
+      }
+      if (operand is String) {
+        final parsed = DateTime.tryParse(operand.trim());
+        if (parsed == null) return operand;
+        return dateOnly ? _dateOnly(parsed) : parsed;
+      }
+      return operand;
+    case ColumnType.boolean:
+      if (operand is bool) return operand;
+      if (operand is String) {
+        final lower = operand.trim().toLowerCase();
+        if (lower == 'true') return true;
+        if (lower == 'false') return false;
+      }
+      return operand;
+    case ColumnType.text:
+    case ColumnType.custom:
+      return operand;
+  }
+}
+
+/// Key a typed operand is written under in JSON.
+const String filterDateKey = r'$date';
+
+/// Key a [BigInt] operand is written under in JSON.
+const String filterBigIntKey = r'$bigint';
+
+/// Encodes a filter operand as something `jsonEncode` accepts.
+///
+/// A [DateTime] made `jsonEncode` throw outright, which meant a saved view
+/// holding a date filter could not be stored at all.
+Object? encodeFilterOperand(Object? operand) {
+  if (operand is DateTime) {
+    return {filterDateKey: operand.toIso8601String()};
+  }
+  if (operand is BigInt) return {filterBigIntKey: operand.toString()};
+  if (operand is Iterable) {
+    return [for (final value in operand) encodeFilterOperand(value)];
+  }
+  return operand;
+}
+
+/// Decodes what [encodeFilterOperand] wrote.
+///
+/// A bare ISO string is left as a string: it may be a text column's operand,
+/// and a date column's operand is coerced by [coerceFilterOperand] against
+/// the column type, which knows which it is.
+Object? decodeFilterOperand(Object? operand) {
+  if (operand is Map) {
+    final date = operand[filterDateKey];
+    if (date is String) {
+      return DateTime.tryParse(date) ?? date;
+    }
+    final big = operand[filterBigIntKey];
+    if (big is String) {
+      return BigInt.tryParse(big) ?? big;
+    }
+    return operand;
+  }
+  if (operand is List) {
+    return [for (final value in operand) decodeFilterOperand(value)];
+  }
+  return operand;
+}

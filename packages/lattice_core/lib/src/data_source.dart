@@ -129,8 +129,20 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
 
   set columns(Map<String, GridColumn<T>> value) {
     _columns = value;
+    _columnTypesCache = null;
     _revision++;
   }
+
+  Map<String, ColumnType>? _columnTypesCache;
+
+  /// Each column's declared type, for compiling a filter against it.
+  ///
+  /// Built once per set of columns rather than per filter pass: it is what
+  /// tells [Filter.compile] that `'50'` typed into this column means the
+  /// number 50.
+  Map<String, ColumnType> get columnTypes => _columnTypesCache ??= {
+        for (final column in _columns.values) column.field: column.type,
+      };
 
   /// Increments whenever the rows or columns change.
   ///
@@ -394,7 +406,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   @override
   Future<T> commit(T original, T updated) async {
-    final index = _rows.indexOf(original);
+    final index = indexOfRow(original);
     if (index < 0) {
       throw StateError('The edited row is no longer in the source.');
     }
@@ -404,6 +416,21 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     return updated;
   }
 
+  /// The position of [row], found by identity before equality.
+  ///
+  /// `indexOf` uses `==`, so two rows a model calls equal - two identical
+  /// records, two freezed or equatable values with the same fields - were
+  /// indistinguishable, and editing the second wrote over the first. The
+  /// row the caller handed us is the row we hold, so identity is the right
+  /// question; equality stays as the fallback for a model that returns a
+  /// fresh equal instance.
+  int indexOfRow(T row) {
+    for (var i = 0; i < _rows.length; i++) {
+      if (identical(_rows[i], row)) return i;
+    }
+    return _rows.indexOf(row);
+  }
+
   /// Replaces every row in [writes], notifying once.
   ///
   /// A paste of 200 cells across 20 rows would otherwise re-run the query 20
@@ -411,12 +438,32 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   @override
   Future<List<T>> commitAll(List<RowUpdate<T>> writes) async {
     if (writes.isEmpty) return const [];
+    // One identity index for the whole batch: locating each row with a scan
+    // made a paste of n rows O(n x rows).
+    final positions = Map<T, int>.identity();
+    for (var i = _rows.length - 1; i >= 0; i--) {
+      positions[_rows[i]] = i;
+    }
     final indices = <int>[];
+    final taken = <int>{};
     for (final write in writes) {
-      final index = _rows.indexOf(write.original);
+      var index = positions[write.original] ?? -1;
+      if (index < 0 || taken.contains(index)) {
+        // No identity match: take the first equal row no other write in this
+        // batch has claimed, so two equal rows edited together still land in
+        // two places.
+        index = -1;
+        for (var i = 0; i < _rows.length; i++) {
+          if (!taken.contains(i) && _rows[i] == write.original) {
+            index = i;
+            break;
+          }
+        }
+      }
       if (index < 0) {
         throw StateError('An edited row is no longer in the source.');
       }
+      taken.add(index);
       indices.add(index);
     }
     for (var i = 0; i < writes.length; i++) {
@@ -521,6 +568,10 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     final index = needle.isEmpty ? null : _searchIndexFor(fields);
     // Narrowing has already applied the filter to these rows.
     final applyFilter = filter != null && !canNarrow;
+    // Compiled once per pass, not once per row: this is where an `isIn` over
+    // a thousand checkbox values stops being O(rows x values), and where a
+    // '50' typed into a number column's filter becomes the number 50.
+    final compiled = applyFilter ? filter.compile(types: columnTypes) : null;
     final candidates = canNarrow
         ? _matchedIndices
         : List<int>.generate(_rows.length, (i) => i, growable: false);
@@ -532,7 +583,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
       // walking a filter tree.
       if (index != null && !index[i].contains(needle)) continue;
       final row = _rows[i];
-      if (applyFilter && !filter.matchesRow((f) => columns[f]?.value(row))) {
+      if (compiled != null && !compiled.test((f) => columns[f]?.value(row))) {
         continue;
       }
       indices.add(i);
@@ -621,7 +672,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   String _indexKey = '';
   List<String> _searchIndex = const [];
 
-  /// One lowercased, searchable string per row, covering [fields].
+  /// One folded, searchable string per row, covering [fields].
   ///
   /// Quick search is the most repeated operation a grid does - once per
   /// keystroke - and formatting every cell of every row each time dominated
@@ -646,7 +697,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
         if (c > 0) buffer.write('\u0001');
         buffer.write(resolved[c].formattedValue(row));
       }
-      index[i] = buffer.toString().toLowerCase();
+      index[i] = foldText(buffer.toString());
     }
 
     _indexRevision = revision;
