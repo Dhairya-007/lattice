@@ -1,9 +1,11 @@
 name: lattice_core
+# pub.dev scores this: between 60 and 180 characters, because a search result
+# only shows the first part of it. 161.
 description: >-
-  Pure Dart data grid and data table engine: multi-column sorting, filtering,
-  search, grouping with aggregates, tree rows, virtualization, row and range
-  selection, cell editing, CSV export, paging and saved views.
-version: 0.4.0
+  Pure Dart data grid engine: multi-column sorting, filtering, search,
+  grouping with aggregates, tree rows, virtualization, selection, cell editing
+  and CSV export.
+version: 0.4.1
 homepage: https://github.com/Dhairya-007/lattice
 repository: https://github.com/Dhairya-007/lattice
 issue_tracker: https://github.com/Dhairya-007/lattice/issues
@@ -20,13 +22,14 @@ topics:
 # Shown in the gallery on the package page. The engine draws nothing itself,
 # so these are labelled diagrams of what it drives through an adapter.
 #
-# pub.dev refuses a description over 200 characters, and refuses it at upload
-# rather than in `dart pub publish --dry-run`.
+# Two different limits apply, and neither is checked by
+# `dart pub publish --dry-run`: the upload refuses a description over 200
+# characters, and the package score wants it under 160. 154.
 screenshots:
   - description: >-
       Labelled diagram of the grid: a frozen column, a multi-sort header, a
-      filter row, a group header with its subtotal, a selected range, a cell
-      being edited, and a summary footer.
+      filter row, a group header with its subtotal, a selected range and a
+      summary footer.
     path: doc/anatomy-light.png
   - description: The same diagram in dark mode.
     path: doc/anatomy-dark.png

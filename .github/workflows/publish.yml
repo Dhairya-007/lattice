@@ -6,12 +6,17 @@ name: Publish to pub.dev
 # pattern below. The very first version of a package has to be published
 # manually with `dart pub publish`, which is what claims the name.
 #
-# A tag is the normal trigger. The manual one exists because pub.dev enforces
-# some checks only at upload - a screenshot description over 200 characters is
-# one, and `dart pub publish --dry-run` does not catch it - so a tag can be
-# pushed, authenticate, and still be refused. Fixing the metadata and running
-# this by hand publishes the version the tag was for, without rewriting the
-# tag.
+# A tag is the only thing that can publish. pub.dev's automated publishing is
+# configured against the tag pattern, so the OIDC token from any other ref is
+# refused with "publishing from github is not enabled" - a workflow_dispatch
+# cannot stand in for a tag, however convenient that would be.
+#
+# The manual trigger is therefore a pre-flight, not a release: it packages the
+# package and runs every check `dart pub publish --dry-run` can run, so a
+# metadata mistake is found before a tag is pushed. That matters because
+# pub.dev enforces some rules only at upload - a screenshot description over
+# 200 characters is one - and a tag that is refused cannot be reused without
+# rewriting it.
 on:
   push:
     tags:
@@ -20,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: Which package to publish
+        description: Which package to check (dry run only; a tag publishes)
         required: true
         type: choice
         options:
@@ -52,7 +57,8 @@ jobs:
         run: |
           echo "package: ${{ steps.package.outputs.name }}"
           echo "version: $(grep '^version:' pubspec.yaml)"
-          echo "ref:     ${GITHUB_SHA}"
+          echo "ref:     ${GITHUB_REF_NAME} (${GITHUB_SHA})"
+          echo "mode:    ${{ github.event_name == 'push' && 'publish' || 'dry run' }}"
 
       - uses: dart-lang/setup-dart@v1
 
@@ -66,6 +72,12 @@ jobs:
         working-directory: packages/${{ steps.package.outputs.name }}
         run: dart pub get
 
-      - name: Publish
+      - name: Check the package (manual run)
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: packages/${{ steps.package.outputs.name }}
+        run: dart pub publish --dry-run
+
+      - name: Publish (tag only)
+        if: github.event_name == 'push'
         working-directory: packages/${{ steps.package.outputs.name }}
         run: dart pub publish --force
