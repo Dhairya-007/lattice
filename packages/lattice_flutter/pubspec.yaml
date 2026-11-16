@@ -9,14 +9,16 @@ repository: https://github.com/Dhairya-007/lattice
 issue_tracker: https://github.com/Dhairya-007/lattice/issues
 
 # Shown in the gallery on the package page. These are labelled diagrams of
-# the grid's parts rather than screenshots of the app, and say so, because a
-# recording of the example app needs a machine with the Flutter SDK.
+# the grid's parts rather than screenshots of the app, because a recording of
+# the example app needs a machine with the Flutter SDK.
+#
+# pub.dev refuses a description over 200 characters, and refuses it at upload
+# rather than in `dart pub publish --dry-run`.
 screenshots:
   - description: >-
-      Labelled diagram of the grid: a frozen column, a sortable header with a
-      numbered multi-sort arrow, a filter row, a group header carrying its
-      subtotal, a selected range, a cell being edited with its validation
-      error, and a summary footer.
+      Labelled diagram of the grid: a frozen column, a multi-sort header, a
+      filter row, a group header with its subtotal, a selected range, a cell
+      being edited, and a summary footer.
     path: doc/anatomy-light.png
   - description: The same diagram in dark mode, which the theme follows.
     path: doc/anatomy-dark.png

@@ -18,14 +18,15 @@ topics:
   - spreadsheet
 
 # Shown in the gallery on the package page. The engine draws nothing itself,
-# so these are labelled diagrams of what it drives through an adapter, and
-# say so.
+# so these are labelled diagrams of what it drives through an adapter.
+#
+# pub.dev refuses a description over 200 characters, and refuses it at upload
+# rather than in `dart pub publish --dry-run`.
 screenshots:
   - description: >-
-      Labelled diagram of a data grid driven by this engine: a frozen column,
-      a sortable header with a numbered multi-sort arrow, a filter row, a
-      group header carrying its subtotal, a selected cell range, a cell being
-      edited with its validation error, and a summary footer.
+      Labelled diagram of the grid: a frozen column, a multi-sort header, a
+      filter row, a group header with its subtotal, a selected range, a cell
+      being edited, and a summary footer.
     path: doc/anatomy-light.png
   - description: The same diagram in dark mode.
     path: doc/anatomy-dark.png
