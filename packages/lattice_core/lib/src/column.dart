@@ -58,8 +58,10 @@ class GridColumn<T> {
     this.validator,
     this.tooltip,
     this.rule,
+    this.sortKey,
   })  : title = title ?? _humanize(field),
         value = value ?? _mapGetter<T>(field),
+        _usesDefaultValue = value == null,
         assert(minWidth <= maxWidth, 'minWidth must not exceed maxWidth'),
         assert(width > 0, 'width must be positive');
 
@@ -122,6 +124,23 @@ class GridColumn<T> {
   /// costs nothing for rows that are not on screen.
   final CellRule? rule;
 
+  /// Reads the value this column *sorts and groups by*, when that differs
+  /// from the value it shows.
+  ///
+  /// Returned once per row per sort rather than on every comparison, which is
+  /// what makes an expensive ordering affordable: a natural order, a locale
+  /// collation key or an enum rank costs O(n) here instead of O(n log n)
+  /// inside [comparator]. Return a [String], a [num] or any value
+  /// [compareValues] understands.
+  ///
+  /// Takes precedence over [comparator] when both are set, because a key is
+  /// strictly the cheaper way to say the same thing.
+  final Object? Function(T row)? sortKey;
+
+  /// Whether [value] is the generated Map accessor rather than one the caller
+  /// passed, so [copyWith] knows it may regenerate it for a new field.
+  final bool _usesDefaultValue;
+
   /// Whether the user may edit cells in this column.
   bool get editable => setValue != null;
 
@@ -137,9 +156,23 @@ class GridColumn<T> {
     return raw == null ? '' : '$raw';
   }
 
+  /// The value this column orders by: [sortKey] when one is set, and the
+  /// displayed value otherwise.
+  Object? sortValue(T row) => sortKey == null ? value(row) : sortKey!(row);
+
   /// Clamps [candidate] into this column's allowed width range.
   double clampWidth(double candidate) => candidate.clamp(minWidth, maxWidth);
 
+  /// A copy of this column with the given fields replaced.
+  ///
+  /// A `null` argument means "keep what is there", which is why every
+  /// nullable field has a `clear` flag beside it: without one there was no
+  /// way to *remove* a callback, so a column with a `setValue` could never be
+  /// made read-only and a rule could never be taken off a column.
+  ///
+  /// Changing [field] also regenerates the default `Map` accessor, so a
+  /// column declared without a `value:` reads the new field rather than
+  /// quietly keeping the old one.
   GridColumn<T> copyWith({
     String? field,
     String? title,
@@ -149,6 +182,7 @@ class GridColumn<T> {
     double? minWidth,
     double? maxWidth,
     ColumnAlign? align,
+    bool clearAlign = false,
     ColumnPin? pin,
     bool? visible,
     bool? sortable,
@@ -156,33 +190,47 @@ class GridColumn<T> {
     bool? resizable,
     bool? groupable,
     ValueFormatter? format,
+    bool clearFormat = false,
     Comparator<Object?>? comparator,
+    bool clearComparator = false,
     ValueSetter<T>? setValue,
+    bool clearSetValue = false,
     ValueValidator? validator,
+    bool clearValidator = false,
     String? tooltip,
+    bool clearTooltip = false,
     CellRule? rule,
+    bool clearRule = false,
+    Object? Function(T row)? sortKey,
+    bool clearSortKey = false,
   }) {
+    final nextField = field ?? this.field;
+    // A column that never had an accessor of its own reads whichever field it
+    // now names; one that was given an accessor keeps it.
+    final nextValue = value ??
+        (_usesDefaultValue && nextField != this.field ? null : this.value);
     return GridColumn<T>(
-      field: field ?? this.field,
+      field: nextField,
       title: title ?? this.title,
-      value: value ?? this.value,
+      value: nextValue,
       type: type ?? this.type,
       width: width ?? this.width,
       minWidth: minWidth ?? this.minWidth,
       maxWidth: maxWidth ?? this.maxWidth,
-      align: align ?? this.align,
+      align: clearAlign ? null : (align ?? this.align),
       pin: pin ?? this.pin,
       visible: visible ?? this.visible,
       sortable: sortable ?? this.sortable,
       filterable: filterable ?? this.filterable,
       resizable: resizable ?? this.resizable,
       groupable: groupable ?? this.groupable,
-      format: format ?? this.format,
-      comparator: comparator ?? this.comparator,
-      setValue: setValue ?? this.setValue,
-      validator: validator ?? this.validator,
-      tooltip: tooltip ?? this.tooltip,
-      rule: rule ?? this.rule,
+      format: clearFormat ? null : (format ?? this.format),
+      comparator: clearComparator ? null : (comparator ?? this.comparator),
+      setValue: clearSetValue ? null : (setValue ?? this.setValue),
+      validator: clearValidator ? null : (validator ?? this.validator),
+      tooltip: clearTooltip ? null : (tooltip ?? this.tooltip),
+      rule: clearRule ? null : (rule ?? this.rule),
+      sortKey: clearSortKey ? null : (sortKey ?? this.sortKey),
     );
   }
 
@@ -199,11 +247,18 @@ class GridColumn<T> {
     };
   }
 
-  /// `unitPrice` / `unit_price` / `unit-price` -> `Unit Price`.
+  /// `unitPrice` / `unit_price` / `unit-price` -> `Unit Price`, and
+  /// `HTTPStatus` -> `HTTP Status`.
+  ///
+  /// An acronym stays whole: splitting on every case change would have
+  /// produced `H T T P Status`, and splitting only after a lower-case letter
+  /// produced `HTTPStatus`. The boundary that matters is the last capital of
+  /// a run, which begins the next word.
   static String _humanize(String field) {
     final spaced = field
         .replaceAll(RegExp(r'[_\-.]+'), ' ')
         .replaceAllMapped(RegExp(r'(?<=[a-z0-9])(?=[A-Z])'), (_) => ' ')
+        .replaceAllMapped(RegExp(r'(?<=[A-Z])(?=[A-Z][a-z])'), (_) => ' ')
         .trim();
     if (spaced.isEmpty) return field;
     return spaced

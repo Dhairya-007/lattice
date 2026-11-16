@@ -5,6 +5,8 @@ import 'package:test/test.dart';
 import 'fixtures.dart';
 
 void main() {
+  reviewFixes();
+
   final columns = productColumnMap();
 
   group('compareValues', () {
@@ -169,5 +171,115 @@ void main() {
       nulls: NullsPosition.first,
     );
     expect(SortSpec.fromJson(spec.toJson()), spec);
+  });
+}
+
+// Added with the 0.4.0 review fixes: the default order for a text column, and
+// the per-row sort key that makes an expensive order affordable.
+void reviewFixes() {
+  group('default text ordering', () {
+    test('sorts text case-insensitively rather than by code unit', () {
+      final rows = [
+        {'name': 'banana'},
+        {'name': 'Cherry'},
+        {'name': 'apple'},
+      ];
+      final columns = {
+        'name': GridColumn<Map<String, Object?>>(field: 'name'),
+      };
+      final sorted = sortRows(rows, const [SortSpec('name')], columns);
+      expect([
+        for (final r in sorted) r['name']
+      ], [
+        'apple',
+        'banana',
+        'Cherry',
+      ]);
+    });
+
+    test('keeps two spellings of one word in a stable order', () {
+      final rows = [
+        {'name': 'apple'},
+        {'name': 'Apple'},
+      ];
+      final columns = {
+        'name': GridColumn<Map<String, Object?>>(field: 'name'),
+      };
+      final sorted = sortRows(rows, const [SortSpec('name')], columns);
+      expect(sorted.length, 2);
+      // Whichever way round, reversing the direction reverses the result.
+      final down = sortRows(
+        rows,
+        const [SortSpec('name', direction: SortDirection.descending)],
+        columns,
+      );
+      expect(down.first, sorted.last);
+    });
+
+    test('leaves a non-text column in its natural order', () {
+      final rows = [
+        {'n': 10},
+        {'n': 9},
+      ];
+      final columns = {
+        'n': GridColumn<Map<String, Object?>>(
+          field: 'n',
+          type: ColumnType.number,
+        ),
+      };
+      final sorted = sortRows(rows, const [SortSpec('n')], columns);
+      expect([for (final r in sorted) r['n']], [9, 10]);
+    });
+
+    test('a column comparator still wins over the default', () {
+      final rows = [
+        {'name': 'apple'},
+        {'name': 'Cherry'},
+      ];
+      final columns = {
+        'name': GridColumn<Map<String, Object?>>(
+          field: 'name',
+          comparator: (a, b) => '$a'.compareTo('$b'),
+        ),
+      };
+      final sorted = sortRows(rows, const [SortSpec('name')], columns);
+      expect([for (final r in sorted) r['name']], ['Cherry', 'apple']);
+    });
+  });
+
+  group('GridColumn.sortKey', () {
+    test('orders by the key rather than by the displayed value', () {
+      final rows = [
+        {'code': 'item10'},
+        {'code': 'item2'},
+      ];
+      final columns = {
+        'code': GridColumn<Map<String, Object?>>(
+          field: 'code',
+          sortKey: (r) => naturalSortKey(r['code']),
+        ),
+      };
+      final sorted = sortRows(rows, const [SortSpec('code')], columns);
+      expect([for (final r in sorted) r['code']], ['item2', 'item10']);
+    });
+
+    test('is read once per row, not once per comparison', () {
+      var reads = 0;
+      final rows = [
+        for (var i = 0; i < 64; i++) {'n': (i * 37) % 64},
+      ];
+      final columns = {
+        'n': GridColumn<Map<String, Object?>>(
+          field: 'n',
+          type: ColumnType.number,
+          sortKey: (r) {
+            reads++;
+            return r['n'];
+          },
+        ),
+      };
+      sortRows(rows, const [SortSpec('n')], columns);
+      expect(reads, 64);
+    });
   });
 }

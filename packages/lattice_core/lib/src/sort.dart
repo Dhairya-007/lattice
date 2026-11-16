@@ -45,14 +45,25 @@ class SortSpec {
         if (nulls != NullsPosition.last) 'nulls': nulls.name,
       };
 
-  static SortSpec fromJson(Map<String, Object?> json) => SortSpec(
-        json['field']! as String,
-        direction: json['dir'] == 'descending'
-            ? SortDirection.descending
-            : SortDirection.ascending,
-        nulls:
-            json['nulls'] == 'first' ? NullsPosition.first : NullsPosition.last,
-      );
+  /// Rebuilds a spec produced by [toJson].
+  ///
+  /// Throws a [FormatException] - not a [TypeError] - when `field` is missing
+  /// or is not a string, so that a caller restoring a saved view can report a
+  /// corrupt document instead of crashing on a null check.
+  static SortSpec fromJson(Map<String, Object?> json) {
+    final field = json['field'];
+    if (field is! String || field.isEmpty) {
+      throw FormatException('A sort needs a non-empty "field"', json);
+    }
+    return SortSpec(
+      field,
+      direction: json['dir'] == 'descending'
+          ? SortDirection.descending
+          : SortDirection.ascending,
+      nulls:
+          json['nulls'] == 'first' ? NullsPosition.first : NullsPosition.last,
+    );
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -82,20 +93,31 @@ Comparator<T> buildComparator<T>(
     for (final sort in sorts) {
       final column = columns[sort.field];
       if (column == null) continue;
-      final va = column.value(a);
-      final vb = column.value(b);
+      final va = column.sortValue(a);
+      final vb = column.sortValue(b);
       if (va == null || vb == null) {
         if (va == null && vb == null) continue;
         final nullFirst = sort.nulls == NullsPosition.first;
         // Null placement is absolute: it does not flip with the direction.
         return (va == null) == nullFirst ? -1 : 1;
       }
-      final cmp = column.comparator?.call(va, vb) ?? compareValues(va, vb);
+      final cmp = column.comparator?.call(va, vb) ??
+          defaultCompareFor(column.type)(va, vb);
       if (cmp != 0) return sort.isAscending ? cmp : -cmp;
     }
     return 0;
   };
 }
+
+/// The comparison a column of [type] orders by when it declares no
+/// [GridColumn.comparator] of its own.
+///
+/// Text folds case and accents away, with the exact comparison as a tiebreak,
+/// because a user sorting a name column does not expect `Cherry` above
+/// `apple`: code-unit order puts every capital first and every accent after
+/// `z`. Every other type keeps the natural order of its values.
+Comparator<Object?> defaultCompareFor(ColumnType type) =>
+    type == ColumnType.text ? compareValuesCaseInsensitive : compareValues;
 
 /// Returns a new list of [rows] ordered by [sorts], preserving the original
 /// order of rows that compare equal.
@@ -120,7 +142,7 @@ List<T> sortRows<T>(
   final depth = levels.length;
   final keys = List<Object?>.filled(count * depth, null);
   for (var level = 0; level < depth; level++) {
-    final read = columns[levels[level].field]!.value;
+    final read = columns[levels[level].field]!.sortValue;
     final base = level * count;
     for (var i = 0; i < count; i++) {
       keys[base + i] = read(rows[i]);
@@ -134,6 +156,24 @@ List<T> sortRows<T>(
   final nullsFirst = [
     for (final level in levels) level.nulls == NullsPosition.first,
   ];
+
+  // A text column folds case and accents away, and folding inside the
+  // comparator would do it O(n log n) times. The folded key is computed once
+  // per row here; the raw key stays for the exact tiebreak that keeps the
+  // order total.
+  final folded = List<List<String>?>.filled(depth, null);
+  for (var level = 0; level < depth; level++) {
+    if (comparators[level] != null) continue;
+    if (columns[levels[level].field]!.type != ColumnType.text) continue;
+    final base = level * count;
+    if (_keyKind(keys, base, count) != _kindString) continue;
+    final keysForLevel = List<String>.filled(count, '');
+    for (var i = 0; i < count; i++) {
+      final value = keys[base + i];
+      if (value != null) keysForLevel[i] = foldText(value as String);
+    }
+    folded[level] = keysForLevel;
+  }
 
   final order = List<int>.generate(count, (i) => i, growable: false);
 
@@ -153,6 +193,20 @@ List<T> sortRows<T>(
       return null;
     }
 
+    final foldedOnly = folded[0];
+    if (foldedOnly != null) {
+      order.sort((a, b) {
+        final va = keys[a];
+        final vb = keys[b];
+        final nulls = nullOrder(va, vb);
+        if (nulls != null) return nulls == 0 ? a.compareTo(b) : nulls;
+        var cmp = foldedOnly[a].compareTo(foldedOnly[b]);
+        if (cmp == 0) cmp = (va! as String).compareTo(vb! as String);
+        if (cmp != 0) return ascendingOnly ? cmp : -cmp;
+        return a.compareTo(b);
+      });
+      return [for (final i in order) rows[i]];
+    }
     if (kind == _kindNum) {
       order.sort((a, b) {
         final va = keys[a];
@@ -179,6 +233,12 @@ List<T> sortRows<T>(
     }
   }
 
+  final fallbacks = [
+    for (var level = 0; level < depth; level++)
+      comparators[level] ??
+          defaultCompareFor(columns[levels[level].field]!.type),
+  ];
+
   order.sort((a, b) {
     for (var level = 0; level < depth; level++) {
       final base = level * count;
@@ -189,7 +249,14 @@ List<T> sortRows<T>(
         // Null placement is absolute: it does not flip with the direction.
         return (va == null) == nullsFirst[level] ? -1 : 1;
       }
-      final cmp = comparators[level]?.call(va, vb) ?? compareValues(va, vb);
+      final foldedLevel = folded[level];
+      var cmp = 0;
+      if (foldedLevel != null) {
+        cmp = foldedLevel[a].compareTo(foldedLevel[b]);
+        if (cmp == 0) cmp = (va as String).compareTo(vb as String);
+      } else {
+        cmp = fallbacks[level](va, vb);
+      }
       if (cmp != 0) return ascending[level] ? cmp : -cmp;
     }
     // Fall back to the input position, which keeps the sort stable.
