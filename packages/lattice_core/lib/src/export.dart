@@ -18,6 +18,7 @@ class ExportOptions {
     this.formatted = true,
     this.sanitizeFormulas = true,
     this.formulaPrefix = "'",
+    this.respectCollapsed = true,
   });
 
   final bool includeHeader;
@@ -54,6 +55,14 @@ class ExportOptions {
   /// A leading apostrophe is the spreadsheet convention for "treat this as
   /// text"; it is consumed on import rather than shown as part of the value.
   final String formulaPrefix;
+
+  /// Whether a collapsed group exports as its header alone.
+  ///
+  /// On by default, because an export documents itself as matching what is on
+  /// screen and a collapsed group is not on screen. The expansion state was
+  /// accepted and never read, so every row came out whatever the user had
+  /// closed. Turn it off to export the whole result regardless.
+  final bool respectCollapsed;
 }
 
 /// Writes rows as delimiter-separated text.
@@ -86,6 +95,7 @@ class CsvExporter<T> {
   String exportRows(List<T> rows) {
     final out = StringBuffer();
     final exported = _exported;
+    final numeric = _numericFlags(exported);
     if (options.includeHeader) {
       _writeLine(out, [for (final c in exported) c.title]);
     }
@@ -94,16 +104,31 @@ class CsvExporter<T> {
       for (var i = 0; i < exported.length; i++) {
         cells[i] = _cell(exported[i], row);
       }
-      _writeLine(out, cells);
+      _writeLine(out, cells, numeric: numeric);
     }
     return out.toString();
   }
 
+  /// Which exported columns hold numbers.
+  ///
+  /// A number is never a formula, and prefixing it makes a spreadsheet read
+  /// the column as text - which is how every negative value in an exported
+  /// numeric column became `'-5` and broke the sums the user exported it to
+  /// compute.
+  List<bool> _numericFlags(List<GridColumn<T>> exported) =>
+      [for (final c in exported) c.type == ColumnType.number];
+
   /// Exports a grouped result, writing one indented header line per group.
+  ///
+  /// Only the first cell of a row is indented. Indenting every cell turned
+  /// each number into text with leading spaces - `"    1450"` - so a
+  /// spreadsheet read the whole column as text and its sums came out empty.
   String exportGroups(
       List<GroupNode<T>> groups, GroupExpansionState expansion) {
     final out = StringBuffer();
     final exported = _exported;
+    final numeric = _numericFlags(exported);
+    if (exported.isEmpty) return '';
     if (options.includeHeader) {
       _writeLine(out, [for (final c in exported) c.title]);
     }
@@ -113,14 +138,27 @@ class CsvExporter<T> {
         if (options.includeGroupRows) {
           final label = '${options.groupIndent * node.depth}'
               '${node.label} (${node.rowCount})';
-          _writeLine(out, [label, ...List.filled(exported.length - 1, '')]);
+          _writeLine(out, [
+            label,
+            // An export with a single column has no trailing cells to pad,
+            // and List.filled(-1) threw rather than saying so.
+            ...List<String>.filled(exported.length - 1, ''),
+          ]);
+        }
+        // A collapsed group is not on screen, and the export says it matches
+        // what is on screen.
+        if (options.respectCollapsed && !expansion.isExpanded(node.path)) {
+          continue;
         }
         if (node.isLeafGroup) {
           final indent = options.groupIndent * (node.depth + 1);
+          final cells = List<String>.filled(exported.length, '');
           for (final row in node.rows) {
-            _writeLine(out, [
-              for (final c in exported) '$indent${_cell(c, row)}',
-            ]);
+            for (var i = 0; i < exported.length; i++) {
+              final value = _cell(exported[i], row);
+              cells[i] = i == 0 ? '$indent$value' : value;
+            }
+            _writeLine(out, cells, numeric: numeric);
           }
         } else {
           walk(node.children);
@@ -150,10 +188,18 @@ class CsvExporter<T> {
   /// Writing straight into the buffer avoids building an intermediate list of
   /// escaped cells and then joining it, which at 50k rows was most of the
   /// cost of an export.
-  void _writeLine(StringBuffer out, List<String> cells) {
+  void _writeLine(
+    StringBuffer out,
+    List<String> cells, {
+    List<bool>? numeric,
+  }) {
     for (var i = 0; i < cells.length; i++) {
       if (i > 0) out.write(options.delimiter);
-      _writeEscaped(out, cells[i]);
+      _writeEscaped(
+        out,
+        cells[i],
+        sanitize: numeric == null || i >= numeric.length || !numeric[i],
+      );
     }
     out.write(options.lineEnding);
   }
@@ -176,17 +222,24 @@ class CsvExporter<T> {
     for (var i = 0; i < value.length; i++) {
       final unit = value.codeUnitAt(i);
       if (unit == 0x20) continue;
-      return _formulaStarters.contains(unit);
+      if (!_formulaStarters.contains(unit)) return false;
+      // A negative number starts with `-` and is not a formula. Prefixing it
+      // made every negative value in an export read as text.
+      return num.tryParse(value.trim()) == null;
     }
     return false;
   }
 
   /// RFC 4180 quoting: wrap in quotes when the value contains the delimiter, a
   /// quote or a newline, and double any embedded quotes.
-  void _writeEscaped(StringBuffer out, String rawValue) {
+  void _writeEscaped(
+    StringBuffer out,
+    String rawValue, {
+    bool sanitize = true,
+  }) {
     // Sanitise before quoting: the prefix has to end up inside the quotes,
     // or the reader strips it along with them.
-    final value = options.sanitizeFormulas && isFormula(rawValue)
+    final value = sanitize && options.sanitizeFormulas && isFormula(rawValue)
         ? '${options.formulaPrefix}$rawValue'
         : rawValue;
     var needsQuotes = false;
@@ -226,24 +279,83 @@ class CsvExporter<T> {
 /// not produce an empty last row - spreadsheets add one - but an empty line
 /// in the middle does, since that is a row of blanks the user copied.
 ///
-/// Quoting is not interpreted. Spreadsheets hand over tab-separated text with
-/// literal values, and guessing at quotes would mangle a value that is meant
-/// to contain one.
+/// Quoted fields are understood, RFC 4180 style: a field wrapped in double
+/// quotes may contain the delimiter, a newline, or a doubled `""` quote.
+/// Excel, Sheets and LibreOffice all quote such a cell, and reading the text
+/// literally split one cell containing a line break into two rows.
 List<List<String>> parseClipboardText(String text, {String delimiter = '\t'}) {
   if (text.isEmpty) return const [];
+  // A trailing line break is punctuation - spreadsheets add one - so it is
+  // taken off before parsing rather than becoming a row of one empty cell.
   final body = text.endsWith('\r\n')
       ? text.substring(0, text.length - 2)
       : (text.endsWith('\n') || text.endsWith('\r')
           ? text.substring(0, text.length - 1)
           : text);
   if (body.isEmpty) return const [];
-  return [
-    for (final line in body.split(RegExp(r'\r\n|\r|\n'))) line.split(delimiter),
-  ];
+  final rows = <List<String>>[];
+  var row = <String>[];
+  final field = StringBuffer();
+  var quoted = false;
+  var i = 0;
+
+  void endField() {
+    row.add(field.toString());
+    field.clear();
+  }
+
+  void endRow() {
+    endField();
+    rows.add(row);
+    row = <String>[];
+  }
+
+  while (i < body.length) {
+    final char = body[i];
+    if (quoted) {
+      if (char == '"') {
+        if (i + 1 < body.length && body[i + 1] == '"') {
+          field.write('"');
+          i += 2;
+          continue;
+        }
+        quoted = false;
+        i++;
+        continue;
+      }
+      field.write(char);
+      i++;
+      continue;
+    }
+    if (char == '"' && field.isEmpty) {
+      quoted = true;
+      i++;
+      continue;
+    }
+    if (delimiter.isNotEmpty && body.startsWith(delimiter, i)) {
+      endField();
+      i += delimiter.length;
+      continue;
+    }
+    if (char == '\r' || char == '\n') {
+      endRow();
+      i += char == '\r' && i + 1 < body.length && body[i + 1] == '\n' ? 2 : 1;
+      continue;
+    }
+    field.write(char);
+    i++;
+  }
+  endRow();
+  return rows;
 }
 
 /// Serialises a cell range as tab-separated text, the format spreadsheets and
 /// most editors accept from the clipboard.
+///
+/// A cell containing the delimiter, a line break or a quote is wrapped in
+/// quotes with its own quotes doubled, which is what a spreadsheet does and
+/// what [parseClipboardText] reads back. Writing such a cell literally made
+/// one cell holding two lines paste as two rows.
 ///
 /// Sanitises formulas by default for the same reason the CSV exporter does:
 /// pasting a copied range into a spreadsheet is exactly the path
@@ -254,8 +366,17 @@ String toClipboardText<T>(
   bool sanitizeFormulas = true,
   String formulaPrefix = "'",
 }) {
-  String cell(String value) => sanitizeFormulas && CsvExporter.isFormula(value)
-      ? '$formulaPrefix$value'
-      : value;
+  String cell(String value) {
+    final sanitised = sanitizeFormulas && CsvExporter.isFormula(value)
+        ? '$formulaPrefix$value'
+        : value;
+    final needsQuotes = sanitised.contains('"') ||
+        sanitised.contains('\n') ||
+        sanitised.contains('\r') ||
+        (delimiter.isNotEmpty && sanitised.contains(delimiter));
+    if (!needsQuotes) return sanitised;
+    return '"${sanitised.replaceAll('"', '""')}"';
+  }
+
   return cells.map((row) => row.map(cell).join(delimiter)).join('\n');
 }

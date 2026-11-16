@@ -2,6 +2,7 @@
 library;
 
 import 'aggregate.dart';
+import 'compare.dart';
 import 'decoration.dart';
 import 'fetch.dart';
 import 'schema.dart';
@@ -67,11 +68,12 @@ class GridQuery {
   /// describes one attempt, not what the grid wants to show.
   final FetchSignal? signal;
 
-  /// The search text as matching actually uses it: trimmed and lowercased.
+  /// The search text as matching actually uses it: trimmed, lowercased and
+  /// with diacritics folded away, so that typing `creme` finds `Crème`.
   ///
   /// Defined here rather than in each source, so that a source and the cache
   /// key it stores a result under cannot disagree about what was searched for.
-  String get needle => search.trim().toLowerCase();
+  String get needle => foldText(search.trim());
 
   // -- Cache identity -------------------------------------------------------
   //
@@ -199,6 +201,7 @@ class GridResult<T> {
     this.aggregates = const AggregateResult.empty(),
     this.filteredCount,
     this.stats = const {},
+    this.sourceIndexOf,
   });
 
   /// The page of data rows, already ordered. Empty when [groups] is used.
@@ -224,6 +227,17 @@ class GridResult<T> {
   /// silently did nothing. A source that returns stats for a column overrides
   /// its own [LatticeDataSource.statsFor] for as long as the result stands.
   final Map<String, ColumnStats> stats;
+
+  /// Where a row sits in the source, before any filtering or ordering.
+  ///
+  /// Supplied by a source that can answer it - one holding its rows locally -
+  /// and read by the grid for [DataGridRow.sourceIndex]. Null from a source
+  /// that pages remotely and cannot know, which reports -1 instead.
+  ///
+  /// A function rather than a list so that a source can build its lookup on
+  /// the first call: a grid that never reads `sourceIndex` must not pay for
+  /// an index over every matching row.
+  final int Function(T row)? sourceIndexOf;
 
   int get matchedCount => filteredCount ?? totalCount;
 

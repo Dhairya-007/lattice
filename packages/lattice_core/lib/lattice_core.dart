@@ -25,7 +25,7 @@ export 'src/paste.dart';
 export 'src/query.dart';
 export 'src/rows.dart' hide LazyDataRowList, collectGroupPaths, flattenGroups;
 export 'src/selection.dart';
-export 'src/sort.dart' hide buildComparator, sortRows;
+export 'src/sort.dart' hide buildComparator, sortOrder, sortRows;
 export 'src/stacked_header.dart' hide describeHeaderProblems;
 export 'src/tree.dart' hide collectTreePaths, flattenTree, rootsOf;
 export 'src/view_state.dart';

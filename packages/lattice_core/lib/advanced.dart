@@ -21,11 +21,13 @@ export 'src/group.dart' show buildGroups;
 export 'src/rows.dart'
     show
         DetailRowList,
+        GroupedRowList,
         LazyDataRowList,
+        RowSlice,
         collectGroupPaths,
         flattenGroups,
         withDetailRows;
-export 'src/sort.dart' show buildComparator, sortRows;
+export 'src/sort.dart' show buildComparator, sortOrder, sortRows;
 export 'src/stacked_header.dart' show describeHeaderProblems;
 export 'src/tree.dart' show collectTreePaths, flattenTree, rootsOf;
 export 'src/virtualization.dart' show Float64ListLike, FloatList;

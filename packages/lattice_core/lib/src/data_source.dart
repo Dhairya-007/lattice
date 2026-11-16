@@ -1,6 +1,8 @@
 /// Data sources: the seam between the grid and wherever rows come from.
 library;
 
+import 'dart:collection';
+
 import 'aggregate.dart';
 import 'column.dart';
 import 'compare.dart';
@@ -129,8 +131,20 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
 
   set columns(Map<String, GridColumn<T>> value) {
     _columns = value;
+    _columnTypesCache = null;
     _revision++;
   }
+
+  Map<String, ColumnType>? _columnTypesCache;
+
+  /// Each column's declared type, for compiling a filter against it.
+  ///
+  /// Built once per set of columns rather than per filter pass: it is what
+  /// tells [Filter.compile] that `'50'` typed into this column means the
+  /// number 50.
+  Map<String, ColumnType> get columnTypes => _columnTypesCache ??= {
+        for (final column in _columns.values) column.field: column.type,
+      };
 
   /// Increments whenever the rows or columns change.
   ///
@@ -284,26 +298,76 @@ abstract class LatticeDataSource<T> with GridChangeNotifier {
     );
   }
 
-  /// The distinct values of [field] among the rows that currently match, in
-  /// ascending order, for a checkbox filter list.
+  /// The distinct values of [field] for a checkbox filter list.
   ///
-  /// Returns an empty list when the source cannot answer cheaply, which an
-  /// adapter reads as "offer a text filter instead" rather than as "this
-  /// column is empty". [limit] caps the list: a value picker over a
+  /// Returns [DistinctValues.none] when the source cannot answer cheaply,
+  /// which an adapter reads as "offer a text filter instead" rather than as
+  /// "this column is empty". [limit] caps the list: a value picker over a
   /// high-cardinality column is unusable anyway, and a source should not
-  /// materialise a million strings to be told so.
-  List<Object?> distinctValuesFor(String field, {int limit = 500}) => const [];
+  /// materialise a million strings to be told so - [DistinctValues.truncated]
+  /// says whether it had to stop.
+  ///
+  /// The values are computed over the rows that match every *other* filter,
+  /// not over the rows that match this column's own: a list narrowed by the
+  /// column's own filter offers only the values already picked, so a user who
+  /// chooses "Input" can never add "Display" to the selection.
+  DistinctValues distinctValuesFor(String field, {int limit = 500}) =>
+      DistinctValues.none;
+
+  /// Every row this source holds, or null when it cannot say.
+  ///
+  /// A source that holds its rows locally returns them; one that pages a
+  /// backend returns null, because it has no list to return. The grid uses
+  /// this to find a row it has to write to but is not showing - an undo over
+  /// a row on another page, inside a closed group, or filtered out of view -
+  /// which it previously looked for among the visible rows alone and
+  /// therefore silently skipped.
+  List<T>? get localRows => null;
 
   /// Tells the grid to re-run its current query, e.g. after a write.
   void invalidate() => notifyListeners();
 }
 
+/// The distinct values of one column, and whether there are more.
+///
+/// A plain list could not say: the list was read one value over the limit so
+/// that a caller could tell, and then cut back to the limit before it was
+/// returned, which threw away the only evidence. A checkbox filter list that
+/// cannot tell a complete list from a truncated one shows the user a set of
+/// values and lets them believe it is all of them.
+class DistinctValues {
+  const DistinctValues(this.values, {this.truncated = false});
+
+  /// Nothing to offer, from a source that cannot answer.
+  static const DistinctValues none = DistinctValues([]);
+
+  /// The values, ascending. A truncated list holds the smallest ones.
+  final List<Object?> values;
+
+  /// Whether the column holds more values than the limit allowed.
+  final bool truncated;
+
+  bool get isEmpty => values.isEmpty;
+  bool get isNotEmpty => values.isNotEmpty;
+  int get length => values.length;
+
+  @override
+  String toString() =>
+      'DistinctValues(${values.length}${truncated ? '+' : ''})';
+}
+
 /// Serves rows from a list already in memory.
 ///
 /// Runs the whole pipeline locally - filter, search, sort, group, aggregate,
-/// page - and is the source used by the vast majority of grids. For ~100k
-/// rows this stays comfortably inside a frame budget; past that, prefer a
-/// source that pushes the work into a database.
+/// page - and is the source used by the vast majority of grids.
+///
+/// Up to around 20k rows every operation stays inside a 16.7 ms frame on a
+/// desktop machine. Between there and 100k, sorting and a whole-table search
+/// cross it: a three-column sort of 50k rows takes about 60 ms, which reads
+/// as a stall rather than a dropped frame. Past 100k, prefer a source that
+/// pushes the work into a database. `benchmark/grid_benchmark.dart` measures
+/// all of it, and `benchmark/budgets.dart` records what each operation is
+/// allowed to cost.
 class InMemoryDataSource<T> extends LatticeDataSource<T> {
   InMemoryDataSource(List<T> rows) : _rows = List<T>.of(rows);
 
@@ -311,6 +375,9 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   /// The current, unprocessed rows.
   List<T> get rows => List<T>.unmodifiable(_rows);
+
+  @override
+  List<T>? get localRows => _rows;
 
   int get length => _rows.length;
 
@@ -376,10 +443,189 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   }
 
   /// Replaces the row at [index], as an edit commit does.
+  ///
+  /// The pipeline is patched rather than thrown away where that is possible:
+  /// see [_patchRow]. One edited cell used to re-index, re-filter and re-sort
+  /// the whole table - 85 ms at 50k rows with a search and a sort active, for
+  /// a change to one value.
   void replaceAt(int index, T row) {
+    final previous = _rows[index];
     _rows[index] = row;
     bumpRevision();
+    _patchRow(index, previous, row);
     notifyListeners();
+  }
+
+  /// Keeps the memoised stages valid across a single replaced row, or leaves
+  /// them stale for a full recompute.
+  ///
+  /// Returns whether the patch was applied, which is only for the assertions
+  /// and the tests: a caller cannot tell the difference, and that is the
+  /// point. Where anything about the current state is not understood here,
+  /// the stages are left stale and the next fetch rebuilds them - a slow
+  /// answer is always allowed; a wrong one is not.
+  bool _patchRow(int index, T previous, T updated) {
+    final query = _lastQuery;
+    if (query == null) return false;
+    // The caches have to have been valid for the revision before this one.
+    final before = revision - 1;
+    if (_matchedRevision != before) return false;
+    if (_matchedKey.isEmpty && _matchedRows.isEmpty) return false;
+    if (query.isGrouped) {
+      // The group tree is rebuilt from the ordered rows either way, and the
+      // lazy-group path has its own book-keeping.
+      return false;
+    }
+
+    final fields = _searchFieldsFor(query);
+    final needle = query.needle;
+    if (needle.isNotEmpty) {
+      // The search index has to be in hand and cover the same fields.
+      if (_indexRevision != before || _indexKey != fields.join(',')) {
+        return false;
+      }
+      if (_searchIndex.length != _rows.length) return false;
+    }
+
+    final sorted = query.sorts.isNotEmpty;
+    if (sorted) {
+      if (_orderedRevision != before ||
+          _orderedKey != _orderedKeyFor(query) ||
+          _orderedRows.length != _orderedIndices.length) {
+        return false;
+      }
+    }
+
+    // 1. The row's searchable text.
+    if (needle.isNotEmpty || _indexRevision == before) {
+      if (_indexRevision == before && _searchIndex.length == _rows.length) {
+        final resolved = [
+          for (final field in _indexKey.split(','))
+            if (columns[field] != null) columns[field]!,
+        ];
+        final buffer = StringBuffer();
+        for (var c = 0; c < resolved.length; c++) {
+          if (c > 0) buffer.write('\u0001');
+          buffer.write(resolved[c].formattedValue(updated));
+        }
+        _searchIndex[index] = foldText(buffer.toString());
+        _indexRevision = revision;
+      }
+    }
+
+    // 2. Does the row still match?
+    final filter = query.filter;
+    final compiled = filter?.compile(types: columnTypes);
+    final matchesSearch =
+        needle.isEmpty || _searchIndex[index].contains(needle);
+    final matchesFilter =
+        compiled == null || compiled.test((f) => columns[f]?.value(updated));
+    final matches = matchesSearch && matchesFilter;
+
+    final at = _positionInMatched(index);
+    final wasMatched = at >= 0;
+    if (wasMatched && matches) {
+      _matchedRows = List<T>.of(_matchedRows)..[at] = updated;
+    } else if (wasMatched && !matches) {
+      _matchedRows = List<T>.of(_matchedRows)..removeAt(at);
+      _matchedIndices = List<int>.of(_matchedIndices)..removeAt(at);
+    } else if (!wasMatched && matches) {
+      final insertAt = _insertionInMatched(index);
+      _matchedRows = List<T>.of(_matchedRows)..insert(insertAt, updated);
+      _matchedIndices = List<int>.of(_matchedIndices)..insert(insertAt, index);
+    }
+    _matchedRevision = revision;
+    // Everything derived from the matched set - stats, distinct values, the
+    // source-position lookup - is keyed on this.
+    _matchedGeneration++;
+
+    // 3. Where does it belong in the order?
+    if (!sorted) {
+      _orderedRows = _matchedRows;
+      _orderedIndices = _matchedIndices;
+      _orderedRevision = revision;
+      return true;
+    }
+
+    final rows = List<T>.of(_orderedRows);
+    final indices = List<int>.of(_orderedIndices);
+    final wasAt = indices.indexOf(index);
+    if (wasAt >= 0) {
+      rows.removeAt(wasAt);
+      indices.removeAt(wasAt);
+    }
+    if (matches) {
+      final comparator = buildComparator<T>(query.sorts, columns);
+      final insertAt =
+          _insertionInOrder(rows, indices, updated, index, comparator);
+      rows.insert(insertAt, updated);
+      indices.insert(insertAt, index);
+    }
+    _orderedRows = rows;
+    _orderedIndices = indices;
+    _orderedRevision = revision;
+    return true;
+  }
+
+  /// Position of source index [index] in [_matchedIndices], or -1.
+  ///
+  /// The indices are ascending, so this is a binary search.
+  int _positionInMatched(int index) {
+    var low = 0;
+    var high = _matchedIndices.length - 1;
+    while (low <= high) {
+      final mid = (low + high) >> 1;
+      final value = _matchedIndices[mid];
+      if (value == index) return mid;
+      if (value < index) {
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return -1;
+  }
+
+  /// Where source index [index] belongs in [_matchedIndices].
+  int _insertionInMatched(int index) {
+    var low = 0;
+    var high = _matchedIndices.length;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      if (_matchedIndices[mid] < index) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  }
+
+  /// Where [row] belongs in an already ordered list.
+  ///
+  /// Ties are broken by source position, which is what [sortOrder] does with
+  /// the input order, so the row lands exactly where a full re-sort would
+  /// have put it.
+  int _insertionInOrder(
+    List<T> rows,
+    List<int> indices,
+    T row,
+    int index,
+    Comparator<T> comparator,
+  ) {
+    var low = 0;
+    var high = rows.length;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      var cmp = comparator(rows[mid], row);
+      if (cmp == 0) cmp = indices[mid].compareTo(index);
+      if (cmp < 0) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
   }
 
   void clear() {
@@ -394,7 +640,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   @override
   Future<T> commit(T original, T updated) async {
-    final index = _rows.indexOf(original);
+    final index = indexOfRow(original);
     if (index < 0) {
       throw StateError('The edited row is no longer in the source.');
     }
@@ -404,6 +650,21 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     return updated;
   }
 
+  /// The position of [row], found by identity before equality.
+  ///
+  /// `indexOf` uses `==`, so two rows a model calls equal - two identical
+  /// records, two freezed or equatable values with the same fields - were
+  /// indistinguishable, and editing the second wrote over the first. The
+  /// row the caller handed us is the row we hold, so identity is the right
+  /// question; equality stays as the fallback for a model that returns a
+  /// fresh equal instance.
+  int indexOfRow(T row) {
+    for (var i = 0; i < _rows.length; i++) {
+      if (identical(_rows[i], row)) return i;
+    }
+    return _rows.indexOf(row);
+  }
+
   /// Replaces every row in [writes], notifying once.
   ///
   /// A paste of 200 cells across 20 rows would otherwise re-run the query 20
@@ -411,18 +672,44 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   @override
   Future<List<T>> commitAll(List<RowUpdate<T>> writes) async {
     if (writes.isEmpty) return const [];
+    // One identity index for the whole batch: locating each row with a scan
+    // made a paste of n rows O(n x rows).
+    final positions = Map<T, int>.identity();
+    for (var i = _rows.length - 1; i >= 0; i--) {
+      positions[_rows[i]] = i;
+    }
     final indices = <int>[];
+    final taken = <int>{};
     for (final write in writes) {
-      final index = _rows.indexOf(write.original);
+      var index = positions[write.original] ?? -1;
+      if (index < 0 || taken.contains(index)) {
+        // No identity match: take the first equal row no other write in this
+        // batch has claimed, so two equal rows edited together still land in
+        // two places.
+        index = -1;
+        for (var i = 0; i < _rows.length; i++) {
+          if (!taken.contains(i) && _rows[i] == write.original) {
+            index = i;
+            break;
+          }
+        }
+      }
       if (index < 0) {
         throw StateError('An edited row is no longer in the source.');
       }
+      taken.add(index);
       indices.add(index);
     }
     for (var i = 0; i < writes.length; i++) {
-      _rows[indices[i]] = writes[i].updated;
+      final at = indices[i];
+      final previous = _rows[at];
+      _rows[at] = writes[i].updated;
+      // Patched row by row, as a single edit is: a paste of twenty rows into
+      // a 50k-row grid costs twenty splices rather than a re-index, a
+      // re-filter and a re-sort. One notification for the batch either way.
+      bumpRevision();
+      _patchRow(at, previous, writes[i].updated);
     }
-    bumpRevision();
     notifyListeners();
     return [for (final write in writes) write.updated];
   }
@@ -438,6 +725,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   /// page only re-slices, and reversing a sort does not re-filter.
   @override
   GridResult<T> fetchSync(GridQuery query) {
+    _lastQuery = query;
     final total = _rows.length;
     final matched = _matchedFor(query);
     final ordered = _orderedFor(query, matched);
@@ -452,6 +740,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
         totalCount: total,
         filteredCount: matched.length,
         aggregates: aggregates,
+        sourceIndexOf: sourceIndexOf,
       );
     }
 
@@ -465,6 +754,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
         totalCount: total,
         filteredCount: matched.length,
         aggregates: aggregates,
+        sourceIndexOf: sourceIndexOf,
       );
     }
 
@@ -473,13 +763,48 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
       totalCount: total,
       filteredCount: matched.length,
       aggregates: aggregates,
+      sourceIndexOf: sourceIndexOf,
     );
+  }
+
+  // -- Source positions -----------------------------------------------------
+
+  int _positionGeneration = -1;
+  Map<T, int>? _positions;
+
+  /// Where [row] sits in the unordered, unfiltered list.
+  ///
+  /// The grid used to report a row's position in the *sorted* result as its
+  /// source index, which is a different number as soon as anything is sorted,
+  /// and -1 for every grouped or tree row even though the rows were right
+  /// here. The lookup is keyed by identity - two equal rows are two rows -
+  /// and built on the first call per matched set, so a grid that never asks
+  /// pays nothing.
+  int sourceIndexOf(T row) {
+    var positions = _positions;
+    if (positions == null || _positionGeneration != _matchedGeneration) {
+      positions = Map<T, int>.identity();
+      for (var i = 0; i < _matchedIndices.length; i++) {
+        positions[_matchedRows[i]] = _matchedIndices[i];
+      }
+      _positions = positions;
+      _positionGeneration = _matchedGeneration;
+    }
+    return positions[row] ?? -1;
   }
 
   // -- Stage 1: rows that match the filter and the search -------------------
 
   int _matchedRevision = -1;
   String _matchedKey = '';
+
+  /// Bumped whenever the matched set is recomputed.
+  ///
+  /// The stats and distinct-value caches key on this instead of on
+  /// `'$revision\u0000$_matchedKey'`: building that string per call cost real
+  /// time on the conditional-formatting path, which asks for a column's stats
+  /// once per visible cell.
+  int _matchedGeneration = 0;
   String _matchedFilterKey = '';
   String _matchedNeedle = '';
   List<int> _matchedIndices = const [];
@@ -521,6 +846,10 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     final index = needle.isEmpty ? null : _searchIndexFor(fields);
     // Narrowing has already applied the filter to these rows.
     final applyFilter = filter != null && !canNarrow;
+    // Compiled once per pass, not once per row: this is where an `isIn` over
+    // a thousand checkbox values stops being O(rows x values), and where a
+    // '50' typed into a number column's filter becomes the number 50.
+    final compiled = applyFilter ? filter.compile(types: columnTypes) : null;
     final candidates = canNarrow
         ? _matchedIndices
         : List<int>.generate(_rows.length, (i) => i, growable: false);
@@ -532,7 +861,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
       // walking a filter tree.
       if (index != null && !index[i].contains(needle)) continue;
       final row = _rows[i];
-      if (applyFilter && !filter.matchesRow((f) => columns[f]?.value(row))) {
+      if (compiled != null && !compiled.test((f) => columns[f]?.value(row))) {
         continue;
       }
       indices.add(i);
@@ -541,6 +870,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
     _matchedRevision = revision;
     _matchedKey = key;
+    _matchedGeneration++;
     _matchedFilterKey = filterKey;
     _matchedNeedle = needle;
     _matchedIndices = indices;
@@ -550,7 +880,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
 
   // -- Column statistics ----------------------------------------------------
 
-  String _statsKey = '';
+  int _statsGeneration = -1;
   final Map<String, ColumnStats> _stats = {};
 
   /// Range of [field] across the rows that currently match.
@@ -560,10 +890,9 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   /// per matched set, because a bar must not cost a column scan per frame.
   @override
   ColumnStats statsFor(String field) {
-    final key = '$revision\u0000$_matchedKey';
-    if (_statsKey != key) {
+    if (_statsGeneration != _matchedGeneration) {
       _stats.clear();
-      _statsKey = key;
+      _statsGeneration = _matchedGeneration;
     }
     final cached = _stats[field];
     if (cached != null) return cached;
@@ -577,42 +906,97 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
     return stats;
   }
 
-  String _distinctKey = '';
-  final Map<String, List<Object?>> _distinct = {};
+  int _distinctGeneration = -1;
+  int _distinctLimit = -1;
+  String _distinctScope = '';
+  final Map<String, DistinctValues> _distinct = {};
 
-  /// The distinct values of [field] among the rows that currently match.
+  /// The last query this source resolved, so a distinct-value list knows
+  /// which filters to leave out.
+  GridQuery? _lastQuery;
+
+  /// The distinct values of [field] among the rows that match every filter
+  /// except this column's own.
   ///
   /// Cached exactly as [statsFor] is, and for the same reason: a checkbox
   /// filter list is rebuilt every time the menu opens, and scanning a column
-  /// per frame is not affordable. Truncated at [limit], in which case the
-  /// list is the first [limit] values in ascending order.
+  /// per frame is not affordable.
+  ///
+  /// Three things used to be wrong with it. The list was cut back to [limit]
+  /// after being read one over, so a truncated list was indistinguishable
+  /// from a complete one. The values kept were the first ones *seen* rather
+  /// than the smallest, so a truncated list was an arbitrary sample shown in
+  /// sorted order. And the rows scanned were the ones matching every filter
+  /// including this column's, so picking a value left that value as the only
+  /// one on offer.
   @override
-  List<Object?> distinctValuesFor(String field, {int limit = 500}) {
-    final key = '$revision\u0000$_matchedKey\u0000$limit';
-    if (_distinctKey != key) {
+  DistinctValues distinctValuesFor(String field, {int limit = 500}) {
+    final scope = _distinctScopeKey;
+    if (_distinctGeneration != _matchedGeneration ||
+        _distinctLimit != limit ||
+        _distinctScope != scope) {
       _distinct.clear();
-      _distinctKey = key;
+      _distinctGeneration = _matchedGeneration;
+      _distinctLimit = limit;
+      _distinctScope = scope;
     }
     final cached = _distinct[field];
     if (cached != null) return cached;
 
     final column = columns[field];
-    if (column == null) return const [];
-    final rows =
-        _matchedRows.isEmpty && _matchedKey.isEmpty ? _rows : _matchedRows;
-    final seen = <Object?>{};
-    for (final row in rows) {
-      seen.add(column.value(row));
-      // One over the limit, so a caller can tell a truncated list from a
-      // complete one by its length.
-      if (seen.length > limit) break;
+    if (column == null) return DistinctValues.none;
+
+    // A sorted set bounded at [limit]: the largest value is dropped as soon
+    // as one too many arrives, so what survives is the smallest [limit]
+    // values and the list is a prefix of the real one. Stopping the scan
+    // early instead bounded the time and gave back an arbitrary sample shown
+    // in sorted order, which reads exactly like a complete list. The limit
+    // bounds what is held, not what is read.
+    final seen = SplayTreeSet<Object?>(compareValues);
+    var truncated = false;
+    for (final row in _rowsForDistinct(field)) {
+      final value = column.value(row);
+      if (seen.contains(value)) continue;
+      seen.add(value);
+      if (seen.length > limit) {
+        seen.remove(seen.last);
+        truncated = true;
+      }
     }
-    final values = seen.toList()..sort(compareValues);
-    final out = List<Object?>.unmodifiable(
-      values.length > limit ? values.sublist(0, limit) : values,
+    final out = DistinctValues(
+      List<Object?>.unmodifiable(seen),
+      truncated: truncated,
     );
     _distinct[field] = out;
     return out;
+  }
+
+  /// The rows a distinct-value list for [field] is computed over: those that
+  /// match the rest of the query, with any condition on [field] itself left
+  /// out.
+  Iterable<T> _rowsForDistinct(String field) {
+    final query = _lastQuery;
+    if (query == null) return _rows;
+    final filter = pruneFilter(query.filter, (f) => f != field);
+    final needle = query.needle;
+    if (filter == null && needle.isEmpty) return _rows;
+    final compiled = filter?.compile(types: columnTypes);
+    final index =
+        needle.isEmpty ? null : _searchIndexFor(_searchFieldsFor(query));
+    return [
+      for (var i = 0; i < _rows.length; i++)
+        if (index == null || index[i].contains(needle))
+          if (compiled == null ||
+              compiled.test((f) => columns[f]?.value(_rows[i])))
+            _rows[i],
+    ];
+  }
+
+  /// Identity of the scope a distinct-value list is computed over.
+  String get _distinctScopeKey {
+    final query = _lastQuery;
+    if (query == null) return '';
+    return '${query.filter?.fingerprint ?? ''}\u0000${query.needle}';
   }
 
   // -- The search index -----------------------------------------------------
@@ -621,7 +1005,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   String _indexKey = '';
   List<String> _searchIndex = const [];
 
-  /// One lowercased, searchable string per row, covering [fields].
+  /// One folded, searchable string per row, covering [fields].
   ///
   /// Quick search is the most repeated operation a grid does - once per
   /// keystroke - and formatting every cell of every row each time dominated
@@ -646,7 +1030,7 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
         if (c > 0) buffer.write('\u0001');
         buffer.write(resolved[c].formattedValue(row));
       }
-      index[i] = buffer.toString().toLowerCase();
+      index[i] = foldText(buffer.toString());
     }
 
     _indexRevision = revision;
@@ -661,18 +1045,38 @@ class InMemoryDataSource<T> extends LatticeDataSource<T> {
   String _orderedKey = '';
   List<T> _orderedRows = const [];
 
+  /// Source position of each row in [_orderedRows].
+  ///
+  /// Kept because it is what makes the order reproducible: a sort breaks ties
+  /// by the input position, so a row inserted into an existing order has to
+  /// be placed among its equals by source position to land where a full
+  /// re-sort would have put it.
+  List<int> _orderedIndices = const [];
+
+  String _orderedKeyFor(GridQuery query) => '$_matchedKey\u0000'
+      '${query.sorts.map((s) => s.fingerprint).join(',')}';
+
   List<T> _orderedFor(GridQuery query, List<T> matched) {
-    if (query.sorts.isEmpty) return matched;
-    final key = '$_matchedKey\u0000'
-        '${query.sorts.map((s) => s.fingerprint).join(',')}';
+    if (query.sorts.isEmpty) {
+      _orderedRows = matched;
+      _orderedIndices = _matchedIndices;
+      _orderedRevision = revision;
+      _orderedKey = _orderedKeyFor(query);
+      return matched;
+    }
+    final key = _orderedKeyFor(query);
     if (_orderedRevision == revision && _orderedKey == key) {
       return _orderedRows;
     }
-    final sorted = sortRows<T>(matched, query.sorts, columns);
+    final order = sortOrder<T>(matched, query.sorts, columns);
+    _orderedRows = [for (final i in order) matched[i]];
+    _orderedIndices = [
+      for (final i in order)
+        i < _matchedIndices.length ? _matchedIndices[i] : -1,
+    ];
     _orderedRevision = revision;
     _orderedKey = key;
-    _orderedRows = sorted;
-    return sorted;
+    return _orderedRows;
   }
 
   // -- Stage 3: aggregates and groups ---------------------------------------

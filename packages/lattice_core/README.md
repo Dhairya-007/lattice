@@ -1,7 +1,20 @@
 # lattice_core
 
-The data grid engine behind [Lattice](https://github.com/Dhairya-007/lattice),
-in pure Dart. No Flutter dependency, no UI toolkit of any kind.
+[![pub package](https://img.shields.io/pub/v/lattice_core.svg?color=0175C2)](https://pub.dev/packages/lattice_core)
+[![pub points](https://img.shields.io/pub/points/lattice_core?label=pub%20points)](https://pub.dev/packages/lattice_core/score)
+[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+
+The **data grid engine** behind
+[Lattice](https://github.com/Dhairya-007/lattice), in pure Dart. No Flutter
+dependency, no UI toolkit of any kind.
+
+If you are looking for a data table with multi-column sorting, a filter row,
+grouping with subtotals, tree rows, virtual scrolling over tens of thousands
+of rows, row and range selection, inline editing with undo, CSV export and
+saved views - that behaviour is all here, and it is MIT licensed with no paid
+tier. To draw it in Flutter, add
+[`lattice_flutter`](https://pub.dev/packages/lattice_flutter); to draw it
+anywhere else, write an adapter over this.
 
 Everything a data grid does other than paint lives here:
 
@@ -204,9 +217,14 @@ adapter for another toolkit.
 
 ## Performance notes
 
-- `InMemoryDataSource` runs the whole pipeline eagerly on each query. Around
-  100k rows that stays inside a frame budget on a desktop machine; past that,
-  push the work into a database behind an `AsyncDataSource`.
+- `InMemoryDataSource` runs the whole pipeline eagerly on each query. **Up to
+  around 20k rows every operation stays inside a 16.7 ms frame** on a desktop
+  machine. Past that, sorting and a whole-table search cross it - a
+  three-column sort of 50k rows is about 60 ms - so a sort there is a visible
+  stall rather than a dropped frame. Past 100k, push the work into a database
+  behind an `AsyncDataSource`. The figures are in the table below, and the
+  earlier claim of "around 100k inside a frame" was simply wrong: it was never
+  measured at 100k.
 - Row offsets are a prefix-sum table with binary-searched lookups, so scrolling
   a million variable-height rows is O(log n) per frame rather than O(n).
 - Filtering projects only the fields a filter actually references, so filtering

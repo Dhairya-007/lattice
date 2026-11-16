@@ -218,10 +218,14 @@ void main() {
       expect(cellFor('a=b'), 'a=b');
     });
 
-    test('a negative number is quoted as text, which is the trade-off', () {
-      // '-5' is indistinguishable from the start of a formula, so it is
-      // sanitised too. Machine-read exports should turn this off.
-      expect(cellFor('-5'), "'-5");
+    test('a negative number exports as a number', () {
+      // It used to be sanitised as a formula, which made a spreadsheet read
+      // the whole column as text and every sum over it come out empty.
+      expect(cellFor('-5'), '-5');
+      expect(cellFor('-12.5'), '-12.5');
+      expect(cellFor('+3'), '+3');
+      // A value that only looks like one is still neutralised.
+      expect(cellFor('-5+cmd'), "'-5+cmd");
       expect(cellFor('-5', sanitize: false), '-5');
     });
 

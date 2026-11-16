@@ -104,11 +104,31 @@ mixin GridChangeNotifier {
     }
     _lastChanges = what;
     // Iterate a copy: a listener may add or remove listeners while running.
+    //
+    // Every listener runs even if one throws. A widget that throws while
+    // rebuilding used to stop every listener registered after it, so one
+    // broken cell froze the rest of the grid; the first error is rethrown
+    // once they have all had their turn, so it is still reported.
+    Object? firstError;
+    StackTrace? firstStack;
     for (final listener in List<GridListener>.of(_listeners)) {
-      listener();
+      try {
+        listener();
+      } catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
     }
     for (final listener in List<GridChangeListener>.of(_changeListeners)) {
-      listener(what);
+      try {
+        listener(what);
+      } catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+    }
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError, firstStack ?? StackTrace.current);
     }
   }
 

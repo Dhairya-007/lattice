@@ -1,6 +1,7 @@
 /// Hierarchical rows: a row that is the parent of other rows.
 library;
 
+import 'group.dart';
 import 'rows.dart';
 
 /// How the rows form a hierarchy.
@@ -65,15 +66,22 @@ class TreeSpec<T> {
 
 /// Flattens [rows] into the visible rows of a tree, skipping what is closed.
 ///
-/// Paths are built from [keyOf], the same identity the rest of the grid uses,
-/// so expansion survives a re-sort or a reload - exactly as group expansion
-/// does. The separator is a character a key is unlikely to contain; a key
-/// that does contain it can only collide with another key that also does.
+/// A row's path is its own key, type-tagged, and not the chain of its
+/// ancestors: a row is rendered once whatever claims it, so its key already
+/// identifies it, and repeating every ancestor made the paths grow
+/// quadratically with depth - 36MB of path characters over a 4,000-deep
+/// chain, which is 110ms of flattening spent building strings nobody reads.
 ///
 /// A row that is reachable twice - a cycle in a parent reference, or a child
 /// listed under two parents - is rendered once, under the first parent that
 /// claims it. A grid that hangs is a worse answer to bad data than a grid
 /// that is missing a branch.
+///
+/// [childComparator] orders the children of each row, which is how a sort on
+/// a nested model reaches past its roots: the pipeline only ever sees the
+/// rows the data source holds, so for a `childrenOf` model it sorts the roots
+/// and nothing else. [substitute] replaces a row as it is read, so an
+/// optimistic write shows up on a child too.
 List<GridRow<T>> flattenTree<T>({
   required List<T> rows,
   required TreeSpec<T> spec,
@@ -81,6 +89,9 @@ List<GridRow<T>> flattenTree<T>({
   required GroupExpansionState expansion,
   Map<Object, List<T>> loadedChildren = const {},
   Set<Object> loadingKeys = const {},
+  Comparator<T>? childComparator,
+  T Function(T row)? substitute,
+  int Function(T row)? sourceIndexOf,
 }) {
   final out = <GridRow<T>>[];
   final seen = <Object>{};
@@ -103,10 +114,18 @@ List<GridRow<T>> flattenTree<T>({
     }
   }
 
-  List<T> children(T row) {
+  List<T> rawChildren(T row) {
     if (childrenOf != null) return childrenOf(row);
     if (spec.isLazy) return loadedChildren[keyOf(row)] ?? const [];
     return byParent[keyOf(row)] ?? const [];
+  }
+
+  List<T> children(T row) {
+    final kids = rawChildren(row);
+    if (childComparator == null || kids.length < 2) return kids;
+    // A nested model's children never reach the pipeline, so the sort the
+    // user asked for is applied to each level here.
+    return List<T>.of(kids)..sort(childComparator);
   }
 
   /// Whether a disclosure control belongs on this row.
@@ -119,36 +138,55 @@ List<GridRow<T>> flattenTree<T>({
     return loaded.isNotEmpty;
   }
 
-  void walk(List<T> level, int depth, String parentPath) {
-    for (final row in level) {
+  // An explicit stack, not recursion: a folder tree or a bill of materials
+  // from real data reaches thousands of levels, and the recursive version
+  // overflowed the stack between 4,500 and 5,000 of them - a crash with no
+  // bad input to point at.
+  void walk(List<T> roots) {
+    final stack = <_Pending<T>>[];
+    for (var i = roots.length - 1; i >= 0; i--) {
+      stack.add(_Pending<T>(roots[i], 0));
+    }
+    while (stack.isNotEmpty) {
+      final pending = stack.removeLast();
+      final row = pending.row;
       final key = keyOf(row);
       if (!seen.add(key)) continue;
-      final path = parentPath.isEmpty ? '$key' : '$parentPath\u001f$key';
       final kids = children(row);
-      final expanded = expansion.isExpanded(path);
+      final expanded = expansion.isExpanded(pathKeySegment(key));
       out.add(DataGridRow<T>(
         index: out.length,
-        data: row,
-        sourceIndex: -1,
-        depth: depth,
+        data: substitute == null ? row : substitute(row),
+        sourceIndexOf: sourceIndexOf,
+        depth: pending.depth,
         tree: TreeRowInfo(
-          path: path,
+          path: pathKeySegment(key),
           hasChildren: mayHaveChildren(row, kids),
           expanded: expanded,
           loading: loadingKeys.contains(key),
         ),
       ));
       if (kids.isEmpty || !expanded) continue;
-      walk(kids, depth + 1, path);
+      for (var i = kids.length - 1; i >= 0; i--) {
+        stack.add(_Pending<T>(kids[i], pending.depth + 1));
+      }
     }
   }
 
   if (parentOf == null) {
-    walk(rows, 0, '');
+    walk(rows);
     return out;
   }
-  walk(rootsOf<T>(rows, parentOf, keyOf, present, children), 0, '');
+  walk(rootsOf<T>(rows, parentOf, keyOf, present, children));
   return out;
+}
+
+/// One row waiting to be flattened, with the depth it will be drawn at.
+class _Pending<T> {
+  _Pending(this.row, this.depth);
+
+  final T row;
+  final int depth;
 }
 
 /// The rows to draw at depth zero of a flat, parent-referencing model.
@@ -172,16 +210,16 @@ List<T> rootsOf<T>(
   ];
 
   // Reachability ignores expansion: a child hidden under a closed branch is
-  // placed, it is just not on screen.
+  // placed, it is just not on screen. Marked with an explicit stack, because
+  // this walks the whole tree whether or not anything is open - a collapsed
+  // 20,000-deep chain used to overflow here while the grid showed one row.
   final reachable = <Object>{};
-  void mark(List<T> level) {
-    for (final row in level) {
-      if (!reachable.add(keyOf(row))) continue;
-      mark(childrenOf(row));
-    }
+  final stack = <T>[...roots];
+  while (stack.isNotEmpty) {
+    final row = stack.removeLast();
+    if (!reachable.add(keyOf(row))) continue;
+    stack.addAll(childrenOf(row));
   }
-
-  mark(roots);
   if (reachable.length == rows.length) return roots;
   return [
     ...roots,
@@ -215,21 +253,23 @@ List<String> collectTreePaths<T>({
     }
   }
 
-  void walk(List<T> level, String parentPath) {
-    for (final row in level) {
+  void walk(List<T> roots) {
+    final stack = <T>[...roots.reversed];
+    while (stack.isNotEmpty) {
+      final row = stack.removeLast();
       final key = keyOf(row);
       if (!seen.add(key)) continue;
-      final path = parentPath.isEmpty ? '$key' : '$parentPath\u001f$key';
-      out.add(path);
-      walk(
-        childrenOf != null ? childrenOf(row) : (byParent[key] ?? const []),
-        path,
-      );
+      out.add(pathKeySegment(key));
+      final kids =
+          childrenOf != null ? childrenOf(row) : (byParent[key] ?? const []);
+      for (var i = kids.length - 1; i >= 0; i--) {
+        stack.add(kids[i]);
+      }
     }
   }
 
   if (parentOf == null) {
-    walk(rows, '');
+    walk(rows);
     return out;
   }
   walk(
@@ -240,7 +280,65 @@ List<String> collectTreePaths<T>({
       present,
       (row) => byParent[keyOf(row)] ?? const [],
     ),
-    '',
   );
   return out;
+}
+
+/// Flattens a nested model into the rows and parent references a grid can
+/// filter, search and sort.
+///
+/// A `childrenOf` model only ever hands the grid its roots, so the pipeline
+/// has nothing else to work on: searching for a child's name matched nothing,
+/// because no row the data source held carried that name. Put the result of
+/// this in the data source and use `TreeSpec(parentOf: ...)` with the
+/// returned lookup, and every stage sees every row.
+///
+/// ```dart
+/// final flat = flattenNestedRows<Node>(
+///   roots,
+///   childrenOf: (n) => n.children,
+///   keyOf: (n) => n.id,
+/// );
+/// final grid = GridController<Node>(
+///   columns: columns,
+///   dataSource: InMemoryDataSource<Node>(flat.rows),
+///   rowKey: (n) => n.id,
+///   tree: TreeSpec<Node>(parentOf: flat.parentOf),
+/// );
+/// ```
+NestedRows<T> flattenNestedRows<T>(
+  List<T> roots, {
+  required List<T> Function(T row) childrenOf,
+  required Object Function(T row) keyOf,
+}) {
+  final rows = <T>[];
+  final parents = <Object, Object>{};
+  final seen = <Object>{};
+  final stack = <T>[...roots.reversed];
+  while (stack.isNotEmpty) {
+    final row = stack.removeLast();
+    final key = keyOf(row);
+    if (!seen.add(key)) continue;
+    rows.add(row);
+    final kids = childrenOf(row);
+    for (var i = kids.length - 1; i >= 0; i--) {
+      parents[keyOf(kids[i])] = key;
+      stack.add(kids[i]);
+    }
+  }
+  return NestedRows<T>(rows, parents, keyOf);
+}
+
+/// The flat form of a nested model, from [flattenNestedRows].
+class NestedRows<T> {
+  const NestedRows(this.rows, this._parents, this._keyOf);
+
+  /// Every row, parents before their children.
+  final List<T> rows;
+
+  final Map<Object, Object> _parents;
+  final Object Function(T row) _keyOf;
+
+  /// The parent reference to give [TreeSpec.parentOf].
+  Object? parentOf(T row) => _parents[_keyOf(row)];
 }

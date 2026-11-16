@@ -49,7 +49,13 @@ void main() {
       );
       final compute = groups.firstWhere((g) => g.label == 'Compute');
       expect(compute.children.map((g) => g.label), ['false', 'true']);
-      expect(compute.children.first.path, 'Compute\u001ffalse');
+      // The path names the field and the key's type at every level, so that
+      // `1` and `'1'` - or two grouping fields - cannot collide.
+      expect(
+        compute.children.first.path,
+        '${groupPathSegment('category', 'Compute')}'
+        '\u001f${groupPathSegment('active', false)}',
+      );
       expect(compute.isLeafGroup, isFalse);
       expect(compute.rows, isEmpty);
       expect(compute.rowCount, 2);
@@ -224,7 +230,7 @@ void main() {
 
     test('toggling one group leaves its siblings alone', () {
       final expansion = GroupExpansionState();
-      expansion.toggle('Input');
+      expansion.toggle(groupPathSegment('category', 'Input'));
       final rows = flattenGroups(
         buildGroups(sampleProducts(), [const GroupSpec('category')], columns),
         expansion,
@@ -239,7 +245,7 @@ void main() {
 
     test('expansion is keyed by path, so it survives a rebuild', () {
       final expansion = GroupExpansionState();
-      expansion.setExpanded('Compute', false);
+      expansion.setExpanded(groupPathSegment('category', 'Compute'), false);
       final again = flattenGroups(twoLevels(), expansion);
       final compute = again.firstWhere(
         (r) => r is GroupGridRow<Product> && r.label == 'Compute',
@@ -250,7 +256,7 @@ void main() {
     test('collapseAll closes known paths and expandAll reopens them', () {
       final nodes = twoLevels();
       final expansion = GroupExpansionState();
-      expansion.collapseAll(collectGroupPaths(nodes));
+      expansion.collapseAll();
       expect(flattenGroups(nodes, expansion).length, 3);
       expansion.expandAll();
       expect(flattenGroups(nodes, expansion).length, greaterThan(3));

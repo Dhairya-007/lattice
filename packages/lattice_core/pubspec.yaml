@@ -1,15 +1,34 @@
 name: lattice_core
-description: Framework-agnostic data grid engine - sorting, filtering, grouping, aggregation, virtualization, selection and editing in pure Dart.
-version: 0.3.0
+description: >-
+  Pure Dart data grid and data table engine: multi-column sorting, filtering,
+  search, grouping with aggregates, tree rows, virtualization, row and range
+  selection, cell editing, CSV export, paging and saved views.
+version: 0.4.0
 homepage: https://github.com/Dhairya-007/lattice
 repository: https://github.com/Dhairya-007/lattice
 issue_tracker: https://github.com/Dhairya-007/lattice/issues
 
+# pub.dev allows five. These are the words people search the site with, which
+# is the whole of what a topic is for.
 topics:
   - datagrid
   - table
   - data-table
   - grid
+  - spreadsheet
+
+# Shown in the gallery on the package page. The engine draws nothing itself,
+# so these are labelled diagrams of what it drives through an adapter, and
+# say so.
+screenshots:
+  - description: >-
+      Labelled diagram of a data grid driven by this engine: a frozen column,
+      a sortable header with a numbered multi-sort arrow, a filter row, a
+      group header carrying its subtotal, a selected cell range, a cell being
+      edited with its validation error, and a summary footer.
+    path: doc/anatomy-light.png
+  - description: The same diagram in dark mode.
+    path: doc/anatomy-dark.png
 
 environment:
   sdk: ^3.5.0

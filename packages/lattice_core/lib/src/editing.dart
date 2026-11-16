@@ -114,12 +114,17 @@ class EditSession<T> {
 ///
 /// Editors hand back strings; a number column must not silently store `"42"`
 /// where every comparator expects a [num].
+///
+/// A number must be a finite decimal. `num.tryParse` also accepts `0x10`,
+/// `NaN` and `Infinity`, so pasting any of those into a numeric column stored
+/// a value no user typed - 16 for `0x10` - or one that makes every sum,
+/// average and sort over the column meaningless.
 Object? coerceValue(String text, ColumnType type) {
   final trimmed = text.trim();
   if (trimmed.isEmpty) return null;
   switch (type) {
     case ColumnType.number:
-      return num.tryParse(trimmed);
+      return parseDecimal(trimmed);
     case ColumnType.boolean:
       final lower = trimmed.toLowerCase();
       if (lower == 'true' || lower == 'yes' || lower == '1') return true;
@@ -132,6 +137,23 @@ Object? coerceValue(String text, ColumnType type) {
       return text;
   }
 }
+
+/// Parses [text] as a finite decimal number, or returns null.
+///
+/// Decimal only: no hexadecimal, no `NaN`, no `Infinity`. Exposed because an
+/// adapter's editor wants the same rule the engine uses, and because a filter
+/// operand goes through the same question.
+num? parseDecimal(String text) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) return null;
+  if (!_decimal.hasMatch(trimmed)) return null;
+  final parsed = num.tryParse(trimmed);
+  if (parsed == null || !parsed.isFinite) return null;
+  return parsed;
+}
+
+/// An optionally signed decimal, with an optional fraction and exponent.
+final RegExp _decimal = RegExp(r'^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$');
 
 /// Builds a validator that rejects empty values.
 ValueValidator requiredValue([String message = 'Required']) {
@@ -147,6 +169,10 @@ ValueValidator numberRange({num? min, num? max, String? message}) {
   return (Object? value) {
     if (value == null) return null;
     if (value is! num) return message ?? 'Must be a number';
+    // NaN compares false against every bound, so both range tests passed and
+    // the value was declared valid. A NaN in a numeric column poisons every
+    // sum, average and sort over it.
+    if (!value.isFinite) return message ?? 'Must be a finite number';
     if (min != null && value < min) return message ?? 'Must be at least $min';
     if (max != null && value > max) return message ?? 'Must be at most $max';
     return null;

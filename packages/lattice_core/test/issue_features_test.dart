@@ -14,6 +14,10 @@ class SliceBackend extends LatticeDataSource<Product> {
 
   final List<Product> rows;
   final List<int> requestedLimits = [];
+
+  /// Offsets asked for, which is what makes a load-more a slice rather than
+  /// a re-download of everything so far.
+  final List<int> requestedOffsets = [];
   bool _more = true;
 
   @override
@@ -22,11 +26,13 @@ class SliceBackend extends LatticeDataSource<Product> {
   @override
   Future<GridResult<Product>> fetch(GridQuery query) async {
     requestedLimits.add(query.limit ?? -1);
+    requestedOffsets.add(query.offset);
+    final start = query.offset > rows.length ? rows.length : query.offset;
     final limit = query.limit ?? rows.length;
-    final end = limit > rows.length ? rows.length : limit;
+    final end = start + limit > rows.length ? rows.length : start + limit;
     _more = end < rows.length;
     return GridResult<Product>(
-      rows: rows.sublist(0, end),
+      rows: rows.sublist(start, end),
       totalCount: rows.length,
     );
   }
@@ -77,6 +83,15 @@ void main() {
       await grid.loadMore();
       expect(grid.rowCount, 25);
       expect(grid.canLoadMore, isFalse, reason: 'the source said that is all');
+      // One slice per request, from where the last one ended: asking from the
+      // top each time transferred 55 rows to show 25.
+      expect(backend.requestedOffsets, [0, 10, 20]);
+      expect(backend.requestedLimits, [10, 10, 10]);
+      expect(
+        backend.rows.length,
+        25,
+        reason: 'and the whole table was never sent',
+      );
     });
 
     test('a second request while one is in flight is dropped', () async {
@@ -324,7 +339,7 @@ void main() {
 
     test('opening a branch fetches it, and says so while it waits', () async {
       final grid = folderGrid();
-      grid.setRowExpanded('root', true);
+      grid.setRowExpanded(grid.treePathFor('root'), true);
       expect(grid.isLoadingChildren('root'), isTrue);
       expect(
         (grid.visibleRows.first as DataGridRow<Folder>).isLoadingChildren,
@@ -341,21 +356,21 @@ void main() {
 
     test('a branch is fetched once, however often it is reopened', () async {
       final grid = folderGrid();
-      grid.setRowExpanded('root', true);
+      grid.setRowExpanded(grid.treePathFor('root'), true);
       await Future<void>.delayed(Duration.zero);
-      grid.setRowExpanded('root', false);
-      grid.setRowExpanded('root', true);
+      grid.setRowExpanded(grid.treePathFor('root'), false);
+      grid.setRowExpanded(grid.treePathFor('root'), true);
       await Future<void>.delayed(Duration.zero);
       expect(loaded, ['root']);
     });
 
     test('a nested branch stays unfetched until it is opened', () async {
       final grid = folderGrid();
-      grid.setRowExpanded('root', true);
+      grid.setRowExpanded(grid.treePathFor('root'), true);
       await Future<void>.delayed(Duration.zero);
       expect(loaded, ['root']);
 
-      grid.setRowExpanded('root\u001froot/b', true);
+      grid.setRowExpanded(grid.treePathFor('root/b'), true);
       await Future<void>.delayed(Duration.zero);
       expect(loaded, ['root', 'root/b']);
       expect(grid.rowCount, 5);
@@ -366,7 +381,7 @@ void main() {
       final grid = folderGrid(
         roots: const [Folder('broken', 'broken', isFolder: true)],
       );
-      grid.setRowExpanded('broken', true);
+      grid.setRowExpanded(grid.treePathFor('broken'), true);
       await Future<void>.delayed(Duration.zero);
       expect(grid.childrenError('broken'), isA<StateError>());
       expect(loaded.length, 1);

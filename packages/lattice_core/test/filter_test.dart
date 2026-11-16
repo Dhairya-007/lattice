@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:lattice_core/lattice_core.dart';
 import 'package:test/test.dart';
 
@@ -341,10 +343,40 @@ void main() {
     });
 
     test('an unknown operator is rejected rather than silently ignored', () {
+      // A FormatException, not an ArgumentError: the input is a document
+      // read back from storage, and a caller restoring a saved view wants to
+      // report a corrupt document rather than handle a programming error.
       expect(
         () => Filter.fromJson({'field': 'name', 'op': 'sideways'}),
-        throwsArgumentError,
+        throwsFormatException,
       );
+    });
+
+    test('a malformed condition inside a group is skipped, not fatal', () {
+      final warnings = <String>[];
+      final filter = Filter.fromJson({
+        'join': 'and',
+        'children': [
+          {'field': 'name', 'op': 'equals', 'value': 'a'},
+          {'op': 'equals', 'value': 'b'},
+        ],
+      }, warnings: warnings) as FilterGroup;
+      expect(filter.children, hasLength(1));
+      expect(warnings, hasLength(1));
+    });
+
+    test('a date operand survives a JSON round trip as a date', () {
+      final condition = FilterCondition(
+        field: 'when',
+        operator: FilterOperator.greaterThan,
+        value: DateTime.utc(2024, 6, 1),
+      );
+      final encoded = jsonEncode(condition.toJson());
+      final restored = FilterCondition.fromJson(
+        jsonDecode(encoded) as Map<String, Object?>,
+      );
+      expect(restored.value, DateTime.utc(2024, 6, 1));
+      expect(restored, condition);
     });
   });
 }

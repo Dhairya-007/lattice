@@ -64,16 +64,35 @@ class DataGridRow<T> extends GridRow<T> {
   const DataGridRow({
     required super.index,
     required this.data,
-    required this.sourceIndex,
+    int sourceIndex = -1,
+    int Function(T row)? sourceIndexOf,
     super.depth = 0,
     this.tree,
-  });
+  })  : _sourceIndex = sourceIndex,
+        _sourceIndexOf = sourceIndexOf;
 
   final T data;
 
-  /// Index of [data] in the unsorted, unfiltered source list, or -1 when the
-  /// source cannot provide one (remote paging).
-  final int sourceIndex;
+  final int _sourceIndex;
+  final int Function(T row)? _sourceIndexOf;
+
+  /// Index of [data] in the unordered, unfiltered source, or -1 when the
+  /// source cannot say.
+  ///
+  /// A source that holds its rows locally answers this exactly, whatever the
+  /// sort, the filter or the grouping - it used to report the row's position
+  /// in the *sorted* result, which is a different number and was only ever
+  /// right for an unsorted grid. A remote source that pages has no way to
+  /// know, and reports -1.
+  ///
+  /// Resolved on demand. The answer is a lookup by row identity, and a
+  /// grouped grid flattens every matching row on every toggle: paying for it
+  /// per row whether or not anyone reads it put 8ms on a group toggle at 50k
+  /// rows, for a number most grids never ask for.
+  int get sourceIndex {
+    if (_sourceIndex >= 0) return _sourceIndex;
+    return _sourceIndexOf?.call(data) ?? _sourceIndex;
+  }
 
   /// This row's place in the hierarchy, or null in a flat or grouped grid.
   final TreeRowInfo? tree;
@@ -173,11 +192,17 @@ class GroupGridRow<T> extends GridRow<T> {
 /// Expansion is keyed by [GroupNode.path] rather than by object identity, so
 /// it survives re-sorting, re-filtering and data reloads.
 class GroupExpansionState {
-  GroupExpansionState({Set<String>? expanded, this.expandedByDefault = true})
-      : _overrides = expanded?.toSet() ?? <String>{};
+  GroupExpansionState({Set<String>? expanded, bool expandedByDefault = true})
+      : _expandedByDefault = expandedByDefault,
+        _overrides = expanded?.toSet() ?? <String>{};
+
+  bool _expandedByDefault;
 
   /// Whether a group not yet touched by the user counts as open.
-  final bool expandedByDefault;
+  ///
+  /// Flipped by [collapseAll] and [expandAll], which is what lets them mean
+  /// "every group" rather than "every group I have seen so far".
+  bool get expandedByDefault => _expandedByDefault;
 
   /// Paths whose state differs from [expandedByDefault].
   final Set<String> _overrides;
@@ -190,7 +215,11 @@ class GroupExpansionState {
   Set<String> get overrides => Set.unmodifiable(_overrides);
 
   /// Replaces the override set, as restoring a saved view does.
-  void setOverrides(Iterable<String> paths) {
+  ///
+  /// [expandedByDefault] restores the mode as well, because "collapse all"
+  /// is recorded as the mode and not as a list of paths.
+  void setOverrides(Iterable<String> paths, {bool? expandedByDefault}) {
+    if (expandedByDefault != null) _expandedByDefault = expandedByDefault;
     _overrides
       ..clear()
       ..addAll(paths);
@@ -211,18 +240,27 @@ class GroupExpansionState {
     }
   }
 
-  /// Opens every group.
-  void expandAll() => _overrides.clear();
+  /// Opens every group, including ones not yet seen.
+  void expandAll() {
+    _expandedByDefault = true;
+    _overrides.clear();
+  }
 
   /// Closes every group, including ones not yet seen.
-  void collapseAll(Iterable<String> knownPaths) {
+  ///
+  /// Enumerating the paths it knew about could only close the groups already
+  /// on screen, so a group that arrived later - a new page, a changed filter,
+  /// a lazily loaded level - opened itself again straight after a
+  /// collapse-all. Flipping the default is the only version of this that
+  /// means what it says.
+  void collapseAll() {
+    _expandedByDefault = false;
     _overrides.clear();
-    if (expandedByDefault) _overrides.addAll(knownPaths);
   }
 
   GroupExpansionState copy() => GroupExpansionState(
         expanded: _overrides,
-        expandedByDefault: expandedByDefault,
+        expandedByDefault: _expandedByDefault,
       );
 }
 
@@ -232,6 +270,7 @@ List<GridRow<T>> flattenGroups<T>(
   List<GroupNode<T>> nodes,
   GroupExpansionState expansion, {
   Set<String> loadingPaths = const {},
+  int Function(T row)? sourceIndexOf,
 }) {
   final out = <GridRow<T>>[];
   void walk(List<GroupNode<T>> level) {
@@ -253,7 +292,7 @@ List<GridRow<T>> flattenGroups<T>(
           out.add(DataGridRow<T>(
             index: out.length,
             data: row,
-            sourceIndex: -1,
+            sourceIndexOf: sourceIndexOf,
             depth: node.depth + 1,
           ));
         }
@@ -278,8 +317,13 @@ List<GridRow<T>> flattenGroups<T>(
 /// equal in content but not identical. Compare [DataGridRow.data] or
 /// [GridRow.index] rather than identity.
 class LazyDataRowList<T> extends ListBase<GridRow<T>> {
-  LazyDataRowList(this._rows, {this.offset = 0, T Function(T row)? substitute})
-      : _substitute = substitute;
+  LazyDataRowList(
+    this._rows, {
+    this.offset = 0,
+    T Function(T row)? substitute,
+    int Function(T row)? sourceIndexOf,
+  })  : _substitute = substitute,
+        _sourceIndexOf = sourceIndexOf;
 
   final List<T> _rows;
 
@@ -292,6 +336,9 @@ class LazyDataRowList<T> extends ListBase<GridRow<T>> {
   /// remote source stays on screen: the substitution happens per read, so a
   /// grid with no pending write pays nothing for it.
   final T Function(T row)? _substitute;
+
+  /// Where a row sits in the source, when the source can say.
+  final int Function(T row)? _sourceIndexOf;
 
   @override
   int get length => _rows.length;
@@ -307,13 +354,54 @@ class LazyDataRowList<T> extends ListBase<GridRow<T>> {
     return DataGridRow<T>(
       index: index,
       data: substitute == null ? row : substitute(row),
-      sourceIndex: offset + index,
+      sourceIndex: _sourceIndexOf == null ? offset + index : -1,
+      sourceIndexOf: _sourceIndexOf,
     );
   }
 
   @override
   void operator []=(int index, GridRow<T> value) =>
       throw UnsupportedError('The grid row list is read-only.');
+}
+
+/// A read-only window onto part of a row list.
+///
+/// `sublist` copies, and copying a window onto a lazy row list materialises
+/// every row in it: reading `scrollableRows` on an ungrouped 50k-row grid
+/// built 50k wrapper objects, several times a frame, to show forty of them.
+/// A slice reads through instead, so it costs nothing until it is indexed.
+///
+/// Row indices are not renumbered - they are positions in the full visible
+/// list, which is what the selection, the frozen bands and scroll-to-reveal
+/// all speak in.
+class RowSlice<T> extends ListBase<GridRow<T>> {
+  RowSlice(this._rows, this.start, this.end)
+      : assert(start >= 0 && start <= end, 'an empty or forward range');
+
+  final List<GridRow<T>> _rows;
+  final int start;
+  final int end;
+
+  @override
+  int get length {
+    final count = end - start;
+    return count < 0 ? 0 : count;
+  }
+
+  @override
+  set length(int value) => throw UnsupportedError('A row slice is read-only.');
+
+  @override
+  GridRow<T> operator [](int index) {
+    if (index < 0 || index >= length) {
+      throw RangeError.index(index, this, 'index', null, length);
+    }
+    return _rows[start + index];
+  }
+
+  @override
+  void operator []=(int index, GridRow<T> value) =>
+      throw UnsupportedError('A row slice is read-only.');
 }
 
 /// Inserts a [DetailGridRow] after every row whose panel is open, renumbering
@@ -378,8 +466,10 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
     required this.keyOf,
     this.offset = 0,
     T Function(T row)? substitute,
+    int Function(T row)? sourceIndexOf,
   })  : _openAt = openAt,
-        _substitute = substitute;
+        _substitute = substitute,
+        _sourceIndexOf = sourceIndexOf;
 
   final List<T> _rows;
 
@@ -390,6 +480,7 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
   final Object Function(T row) keyOf;
   final int offset;
   final T Function(T row)? _substitute;
+  final int Function(T row)? _sourceIndexOf;
 
   @override
   int get length => _rows.length + _openAt.length;
@@ -418,6 +509,12 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
 
   @override
   GridRow<T> operator [](int index) {
+    // An out-of-range read is an error, not a row: returning the last row's
+    // phantom panel for index 10 of a 3-row list hid the caller's bug and
+    // put a row on screen that does not exist.
+    if (index < 0 || index >= length) {
+      throw RangeError.index(index, this, 'index', null, length);
+    }
     // The largest data index whose row starts at or before [index]. The
     // mapping is monotonic, so this is a binary search.
     var low = 0;
@@ -439,7 +536,8 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
       return DataGridRow<T>(
         index: index,
         data: data,
-        sourceIndex: offset + found,
+        sourceIndex: _sourceIndexOf == null ? offset + found : -1,
+        sourceIndexOf: _sourceIndexOf,
       );
     }
     // The only other row at this position is the panel under that row.
@@ -456,7 +554,11 @@ class DetailRowList<T> extends ListBase<GridRow<T>> {
       throw UnsupportedError('The grid row list is read-only.');
 }
 
-/// Every group path in a tree, used by [GroupExpansionState.collapseAll].
+/// Every group path in a tree.
+///
+/// [GroupExpansionState.collapseAll] no longer needs it - closing "every
+/// group" cannot be a list of the groups currently on screen - but a caller
+/// that wants to act on the paths it can see still can.
 List<String> collectGroupPaths<T>(List<GroupNode<T>> nodes) {
   final out = <String>[];
   void walk(List<GroupNode<T>> level) {
@@ -468,4 +570,146 @@ List<String> collectGroupPaths<T>(List<GroupNode<T>> nodes) {
 
   walk(nodes);
   return out;
+}
+
+/// A grouped row list that resolves positions arithmetically instead of
+/// materialising every row.
+///
+/// Flattening built a wrapper object per visible row, so opening or closing
+/// one group rebuilt the whole list: 36 ms at 200k rows, three frames, for a
+/// change that affects one subtree. This holds an index over the *groups* -
+/// each one's first visual position and how many rows its subtree shows - and
+/// resolves a read by walking down it. A toggle rebuilds the group index,
+/// which is O(groups), and touches no row at all.
+///
+/// As with [LazyDataRowList], a wrapper is created per read: compare
+/// [GridRow.index] or [DataGridRow.data] rather than identity.
+class GroupedRowList<T> extends ListBase<GridRow<T>> {
+  GroupedRowList(
+    List<GroupNode<T>> nodes,
+    this.expansion, {
+    this.loadingPaths = const {},
+    this.sourceIndexOf,
+    T Function(T row)? substitute,
+  })  : _substitute = substitute,
+        _levels = _indexNodes<T>(nodes, expansion, 0);
+
+  final GroupExpansionState expansion;
+  final Set<String> loadingPaths;
+
+  /// Where a row sits in the source, when the source can say.
+  final int Function(T row)? sourceIndexOf;
+
+  final T Function(T row)? _substitute;
+
+  /// The top level of the group index, in display order.
+  final List<_GroupSlot<T>> _levels;
+
+  @override
+  int get length =>
+      _levels.isEmpty ? 0 : _levels.last.start + _levels.last.total;
+
+  @override
+  set length(int value) =>
+      throw UnsupportedError('The grid row list is read-only.');
+
+  @override
+  GridRow<T> operator [](int index) {
+    if (index < 0 || index >= length) {
+      throw RangeError.index(index, this, 'index', null, length);
+    }
+    var level = _levels;
+    while (true) {
+      final slot = _slotAt(level, index);
+      final node = slot.node;
+      if (index == slot.start) {
+        return GroupGridRow<T>(
+          index: index,
+          depth: node.depth,
+          node: node,
+          expanded: expansion.isExpanded(node.path),
+          loading: loadingPaths.contains(node.path),
+        );
+      }
+      if (slot.children.isEmpty) {
+        // A leaf group: the rows follow its header in order.
+        final row = node.rows[index - slot.start - 1];
+        return DataGridRow<T>(
+          index: index,
+          data: _substitute == null ? row : _substitute(row),
+          sourceIndexOf: sourceIndexOf,
+          depth: node.depth + 1,
+        );
+      }
+      level = slot.children;
+    }
+  }
+
+  @override
+  void operator []=(int index, GridRow<T> value) =>
+      throw UnsupportedError('The grid row list is read-only.');
+
+  /// The slot in [level] whose span covers [index].
+  ///
+  /// The slots are contiguous and ascending, so this is a binary search: a
+  /// grid grouped into thousands of groups must not walk them per read.
+  static _GroupSlot<T> _slotAt<T>(List<_GroupSlot<T>> level, int index) {
+    var low = 0;
+    var high = level.length - 1;
+    while (low < high) {
+      final mid = (low + high + 1) >> 1;
+      if (level[mid].start <= index) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return level[low];
+  }
+
+  static List<_GroupSlot<T>> _indexNodes<T>(
+    List<GroupNode<T>> nodes,
+    GroupExpansionState expansion,
+    int start,
+  ) {
+    final out = <_GroupSlot<T>>[];
+    var cursor = start;
+    for (final node in nodes) {
+      final expanded = expansion.isExpanded(node.path);
+      // A group whose contents have not arrived shows its header alone,
+      // rather than claiming to be empty.
+      final shows = expanded && node.loaded;
+      final children = shows && !node.isLeafGroup
+          ? _indexNodes<T>(node.children, expansion, cursor + 1)
+          : <_GroupSlot<T>>[];
+      final contents = !shows
+          ? 0
+          : (node.isLeafGroup
+              ? node.rows.length
+              : (children.isEmpty
+                  ? 0
+                  : children.last.start + children.last.total - cursor - 1));
+      final total = 1 + contents;
+      out.add(
+          _GroupSlot<T>(node, cursor, total, children.cast<_GroupSlot<T>>()));
+      cursor += total;
+    }
+    return out;
+  }
+}
+
+/// One group's place in a [GroupedRowList]: where its header sits and how
+/// many visual rows its subtree contributes.
+class _GroupSlot<T> {
+  _GroupSlot(this.node, this.start, this.total, this.children);
+
+  final GroupNode<T> node;
+
+  /// Visual index of this group's header.
+  final int start;
+
+  /// Rows this group's subtree shows, its header included.
+  final int total;
+
+  final List<_GroupSlot<T>> children;
 }

@@ -1,5 +1,259 @@
 # Changelog
 
+## 0.4.0
+
+A customer read all ~7,000 lines of the engine, wrote a probe per suspected
+defect, and sent back 79 confirmed bugs with the test that reproduces each
+one. This release fixes 77 of them; the two it does not are named at the end,
+with what to do instead. The suite is 699 tests, up from 590.
+
+Six were data-integrity bugs - wrong values written, or user work lost - and
+none of them were things a user could have diagnosed. Editing one of two
+equal rows wrote to the other. "Case-insensitive" filters were
+case-sensitive. A refused write stayed on screen. Undo silently skipped rows
+it could not see, and then consumed the step anyway. Read the first section
+even if you skip the rest.
+
+### Breaking
+
+Behavioural changes first, because they are the ones no compiler will point
+at.
+
+- **A case-insensitive filter is now actually case-insensitive.**
+  `caseSensitive` defaults to false, and `equals`, `notEquals`, `isIn`, `>=`,
+  `<=` and `between` all compared with the tiebreaking comparison a *sort*
+  needs, so `equals: 'apple'` did not match `'Apple'`. A grid relying on the
+  old behaviour was relying on the bug; pass `caseSensitive: true` to keep it.
+- **Text columns sort case- and accent-insensitively by default.**
+  `[banana, Cherry, apple]` sorted to `[Cherry, apple, banana]`, and `école`
+  sorted after `zebra`. Pass a `comparator` to a column to get the code-unit
+  order back. The folded key is computed once per row, so the new default is
+  no slower.
+- **`compareValues` ranks by type class before comparing.** Mixed-type
+  columns used to compare across types by their string forms, which made the
+  relation intransitive - `9 < 10`, `10 < '5'`, `'5' < 9` - so `List.sort`
+  could order them differently between runs. `BigInt` compares as a number
+  rather than as text.
+- **Group and tree paths have a new format.** A path segment now names its
+  field and tags its key's type, because `null` and `"null"`, and `1` and
+  `"1"`, produced the same path - and two groups with one path share one
+  expansion state and one lazy-load cache entry. A tree branch is keyed by
+  its own row key rather than by the chain of its ancestors. Collapsed-group
+  paths saved by 0.3.x no longer match, so a restored view opens with its
+  groups expanded; nothing else in a saved view is affected. Build paths with
+  `groupPathSegment`, or `GridController.treePathFor`, rather than by hand.
+- **`GroupExpansionState.collapseAll()` takes no arguments.** It flipped
+  through the paths it knew about, which could only close the groups already
+  on screen; a group that arrived later opened itself again. It flips the
+  default instead. `GridViewState` carries `groupsExpandedByDefault` so the
+  mode survives a round trip.
+- **`distinctValuesFor` returns `DistinctValues`, not `List<Object?>`.** The
+  list is `values`, and `truncated` says whether the column holds more than
+  the limit - which a bare list could not. It is also computed over the rows
+  matching every filter *except* the column's own, so picking "Input" no
+  longer leaves "Input" as the only value on offer, and a truncated list
+  holds the smallest values rather than the first ones seen.
+- **A data source that pages must honour `GridQuery.offset`.** Infinite
+  scroll asks for one slice from where the last one ended; it used to ask
+  from the top for everything loaded so far, so ten slices of 100 transferred
+  5,500 rows to show 1,000. A source that ignores `offset` will now return
+  the same rows repeatedly.
+- **`exportCsv` honours collapsed groups.** The expansion state was accepted
+  and never read, while the method documented itself as matching the screen.
+  Pass `ExportOptions(respectCollapsed: false)` for the old behaviour.
+- **Negative numbers export as numbers.** The formula sanitiser treated a
+  leading `-` as the start of a formula, so every negative value in a numeric
+  column exported as text and broke the sums the export existed to compute.
+  A value that parses as a plain number is not sanitised, and a
+  `ColumnType.number` column is not sanitised at all.
+- **Clipboard text is quoted.** A cell containing a tab, a newline or a quote
+  round-trips instead of pasting as two rows, and `parseClipboardText` reads
+  the quoted fields Excel, Sheets and LibreOffice produce.
+- **`coerceValue` accepts finite decimals only.** `num.tryParse` read `0x10`
+  as 16 and `NaN` as a double, so pasting either stored a value nobody typed
+  - and `numberRange` called NaN valid, because NaN compares false against
+  every bound. Use `parseDecimal` for the same rule elsewhere.
+- **`pageCount` is 1 while grouped.** Grouping needs every matching row, so
+  paging has nothing to turn; the grid used to advertise pages `nextPage`
+  could not reach.
+- **Two columns sharing a field throw.** `columnsByField` kept one of them, so
+  the other lost its filters, its sort and its editing with no error
+  anywhere.
+- **`moveColumn` counts display positions.** With a hidden column present,
+  `moveColumn('a', 2)` landed at display position 1.
+- **Malformed JSON throws `FormatException`, not `TypeError`.** One corrupt
+  entry in a saved view is skipped with a warning rather than taking the
+  whole view with it; pass `warnings:` to `GridViewState.fromJson` to collect
+  what was dropped. A document from a future schema version is still refused.
+- **`DataGridRow.sourceIndex` is the row's position in the source**, for
+  grouped and tree rows as well. It used to report the position in the
+  *sorted result*, which is a different number as soon as anything is sorted,
+  and -1 for every grouped row.
+- **`countDistinct` no longer counts null**, and `sum`/`average` ignore text
+  reading `NaN` or `Infinity`, which used to make every total over the column
+  NaN. `ColumnStats.mean` divides by the numbers it added up rather than by
+  every non-null value, so `[10, 'n/a']` averages 10 and not 5.
+- **`GridColumn.copyWith` has a `clear` flag per nullable field.** There was
+  no way to *remove* a callback, so a column with a `setValue` could never be
+  made read-only. Changing `field` also regenerates the default `Map`
+  accessor instead of quietly reading the old field.
+- **A listener that throws no longer stops the listeners after it**, in both
+  `GridChangeNotifier` and `FetchSignal`. Every listener runs and the first
+  error is rethrown afterwards.
+- **`setDataSource` resets what belonged to the old source**: its lazily
+  loaded groups and tree children, its errors, writes in flight, which detail
+  panels were open, and the undo history.
+- Smaller: `moveToNextEditableCell` returns null on a source that cannot save
+  (as `beginEdit` already did); an out-of-range read on `DetailRowList`
+  throws a `RangeError` instead of returning a phantom row; `restoreState`
+  emits `GridChange.layout`; `GridQuery.needle` folds accents; a humanised
+  title keeps an acronym whole (`HTTPStatus` → `HTTP Status`).
+
+### Fixed
+
+Data integrity:
+
+- Editing one of two equal rows wrote to the other: `InMemoryDataSource`
+  located the row with `indexOf`, which uses `==`, so records and
+  freezed/equatable models were indistinguishable. Rows are located by
+  identity, and a batch write builds one identity index instead of scanning
+  per row.
+- A write finishing wiped a newer write to the same row, so the cell went
+  back to the older value while the newer one was still in flight. Pending
+  writes are stamped with the write that owns them.
+- A refused write was never rolled back on a model whose setter mutates in
+  place: dropping the optimistic overlay put the overlay back, not the row.
+  The previous values are captured before the setters run and replayed on
+  failure.
+- Undo resolved rows by scanning what was on screen, so a row on another
+  page, inside a closed group or filtered out of view was skipped - and the
+  step had already moved to the redo stack, which made that edit permanently
+  unrepeatable. Rows resolve through the source, the history only moves when
+  something was written, and `lastReplay` reports what was applied.
+- Lazy group loads answered whichever query happened to be current when they
+  landed, so a search typed while loads were in flight showed every
+  pre-search row. Loads carry the fetch token and a source generation.
+- Date filters could not be JSON-encoded at all (`jsonEncode` threw), and
+  with a `toEncodable` they came back as strings and compared against
+  instants by accident. Operands carry their type: `{"$date": "<iso>"}`.
+
+Crashes, hangs and stuck state:
+
+- A deep tree overflowed the stack at ~4,500 levels expanded, and at ~20,000
+  collapsed. Flattening, root-marking and path collection use an explicit
+  stack.
+- `dispose()` left a debounced refresh pending for the life of the isolate,
+  and a direct refresh did the same to a coalesced one it overtook.
+- A source that maps an aborted request onto `FetchCancelled` left
+  `isLoading` true for good.
+- A grouped export with zero columns threw a `RangeError` from
+  `List.filled(-1)`.
+- A filter on a removed column hid every row, with no header left to clear it
+  from. Filters, sorts and groupings whose field the grid no longer has are
+  left out of the query and kept in state, so putting the column back brings
+  the filter back; `inactiveFields` says which are parked.
+
+Wrong state:
+
+- `reload()` never refetched a lazy tree's children.
+- An optimistic edit was invisible in tree and grouped views.
+- After a failed fetch, the counts and aggregates described rows that were
+  gone. `isStale` says when the rows on screen are left over.
+- The page index was not clamped when the data shrank, so the grid showed
+  nothing while rows sat on an earlier page.
+- Group expansion leaked between grouping fields; group headers ignored the
+  column's comparator (High/Medium/Low sorted alphabetically); the blank group
+  jumped to the top when the headers were reversed (`GroupSpec.nulls`).
+- A cell range outlived the rows it covered, and `CellRange.contains`
+  disagreed with `coveredFields` once a field disappeared.
+- A selected group header drifted onto another group when one above it
+  collapsed.
+- `ColumnFit.stretch` dumped the whole remainder on the last column;
+  it fills like water now - `[110, 245, 245]`, not `[110, 200, 290]`.
+- Copying a selection with a group header in it emitted a blank row; a paste
+  across one dropped a row of the user's data instead of skipping to the next
+  data row.
+- A grouped CSV export indented every cell, so numbers became text.
+- Committing a value the user had not changed still wrote to the server and
+  refetched.
+- A nested tree's children never saw the sort; `flattenNestedRows` converts a
+  nested model into the flat rows and parent references the pipeline can
+  filter, search and sort in full.
+- `between` with its bounds typed backwards matched nothing; a filter operand
+  is coerced to the column's type, so `'50'` in a number column compares as
+  50; `isIn` conditions and `FilterGroup`s have value equality;
+  `compareValuesNatural` orders digit runs longer than an `int64`;
+  `compareValuesCaseInsensitive` folds the accents its doc always claimed to.
+
+### Performance
+
+Measured on one M4 laptop, median of 7 runs, against 0.3.0 on the same
+machine. The benchmark gained a probe for each of these, with ceilings in
+`benchmark/budgets.dart`, because the old gate missed every one of them.
+
+| operation | 0.3.0 | 0.4.0 |
+| --- | ---: | ---: |
+| `isIn` over 1,000 values, 50k rows | 1,920 ms | 6.2 ms |
+| natural sort, 50k rows | 2,405 ms | 46 ms |
+| edit one cell with a search and a sort, 50k | 88 ms | 0.7 ms |
+| the same at 200k | 371 ms | 3.5 ms |
+| group toggle, 200k rows | 45 ms | 0.07 ms |
+| conditional formatting, 40 x 200 cells | 13.5 ms | 1.2 ms |
+| flatten a 4,000-deep tree | 110 ms | 2.4 ms |
+| select-all, 1M rows | 109 ms | O(1) |
+| read the scrollable band, 50k rows | 4.5 ms | 0.04 ms |
+
+How: filters compile once per query rather than per row (pre-folded needles,
+a `HashSet` for `isIn`, operands coerced); an expensive ordering computes one
+key per row (`GridColumn.sortKey`, `naturalSortKey`); an edited row is
+patched into each memoised stage instead of invalidating all of them, which a
+randomised differential test holds to the same answer as a full recompute;
+a grouped result is a `GroupedRowList` over an index of the groups, so a
+toggle costs the groups and not the rows; select-all is a flag with a set of
+exceptions; the frozen bands are views (`RowSlice`) rather than copies;
+`sourceIndex` resolves on demand; and the column map is cached.
+
+The README's claim of "~100k rows inside a frame budget" was never measured at
+100k and was not true. It now says what the benchmark says: everything fits
+in a frame to about 20k, sorting and a whole-table search cross it between
+there and 100k, and past 100k the work belongs in a database.
+
+### Added
+
+- `foldText`, `compareValuesFolded`, `valuesEqualFolded`, `naturalSortKey`,
+  `defaultCompareFor`, `sortOrder`.
+- `GridColumn.sortKey` and `sortValue`: the value a column *orders* by,
+  computed once per row per sort.
+- `Filter.compile` and `CompiledFilter`, with `compileCondition`,
+  `coerceFilterOperand`, `encodeFilterOperand`/`decodeFilterOperand` and
+  `pruneFilter`. `FilterCondition.dateOnly` makes `equals` on a date column
+  mean the day rather than the instant.
+- `DistinctValues`; `LatticeDataSource.localRows` and `columnTypes`.
+- `GroupedRowList`, `RowSlice`, `GroupNode.mapRows`, `groupPathSegment`,
+  `pathKeySegment`, `GroupSpec.nulls`.
+- `flattenNestedRows` and `NestedRows`; `flattenTree` takes a
+  `childComparator`, a `substitute` and a `sourceIndexOf`.
+- `GridController.treePathFor`, `inactiveFields`, `isStale`, `lastReplay`,
+  `loadedRowCount`.
+- `EditHistory.peekUndo`/`peekRedo`/`commitUndo`/`commitRedo` and
+  `ReplayOutcome`, so an action is applied before the history moves.
+- `SelectionState.isEverythingSelected` and `followedRows`;
+  `CellRange.clampedTo`.
+- `ExportOptions.respectCollapsed`; `parseDecimal`;
+  `GridViewState.groupsExpandedByDefault`; `ColumnStats.numberCount`;
+  `GridResult.sourceIndexOf`.
+
+### Not fixed
+
+- Search and filtering still only see the rows a data source holds, so a
+  nested (`childrenOf`) tree matches on its roots. `flattenNestedRows` is the
+  supported route, and keeping the ancestors of a match is still to come.
+- `GroupSpec` and `Aggregation` compare their closures by identity, which is
+  all Dart offers for a function. A spec built inline on every rebuild misses
+  the pipeline cache every time; hoist the closure to a static or top-level
+  function. The doc comment claiming otherwise has been corrected.
+
+
 ## 0.3.0
 
 The release that makes the engine's own structure sound: identity instead of

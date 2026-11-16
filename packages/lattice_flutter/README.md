@@ -1,7 +1,11 @@
 # lattice_flutter
 
-An open source data grid for Flutter. MIT licensed, no paid tier, no licence
-key, no evaluation banner.
+An open source **data grid** and **data table** for Flutter: frozen columns,
+multi-column sorting, a filter row, free-text search, grouping with subtotals,
+tree rows, virtualized scrolling over tens of thousands of rows, row and
+range selection, inline editing and CSV export.
+
+MIT licensed, no paid tier, no licence key, no evaluation banner.
 
 ```dart
 LatticeDataGrid<Employee>(

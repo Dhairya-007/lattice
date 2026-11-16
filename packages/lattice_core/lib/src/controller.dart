@@ -73,10 +73,39 @@ class GridController<T> with GridChangeNotifier {
       'A tree needs a rowKey: a branch is remembered by the identity of the '
       'rows above it.',
     );
+    assert(_noDuplicateFields(_columns));
+    assert(() {
+      // The setter validates; the constructor used not to, so a grid built
+      // with a broken band only reported it if someone assigned the bands
+      // again later.
+      final problems = describeHeaderProblems<T>(_stackedHeaders, _columns);
+      if (problems.isNotEmpty) {
+        throw StateError('Stacked headers:\n  ${problems.join('\n  ')}');
+      }
+      return true;
+    }());
     _dataSource.columns = columnsByField;
     _dataSource.addListener(_onSourceChanged);
-    if (isInfinite) _loadedCount = loadMoreSize!;
     refresh();
+  }
+
+  /// Whether every column names a different field.
+  ///
+  /// Two columns with one field is not a layout choice: `columnsByField`
+  /// keeps one of them, so the other silently loses its filters, its sort and
+  /// its editing. Accepting it quietly was the bug.
+  static bool _noDuplicateFields<T>(List<GridColumn<T>> columns) {
+    final seen = <String>{};
+    final duplicates = <String>{};
+    for (final column in columns) {
+      if (!seen.add(column.field)) duplicates.add(column.field);
+    }
+    if (duplicates.isEmpty) return true;
+    throw ArgumentError(
+      'Two columns cannot share a field: ${duplicates.join(', ')}. '
+      'A field is a column\'s identity - its filters, its sort and its '
+      'saved width are all keyed on it.',
+    );
   }
 
   List<GridColumn<T>> _columns;
@@ -247,11 +276,22 @@ class GridController<T> with GridChangeNotifier {
   /// all read this, which is what keeps them agreeing with the screen.
   List<GridColumn<T>> get visibleColumns => orderColumnsForDisplay<T>(_columns);
 
-  Map<String, GridColumn<T>> get columnsByField =>
-      {for (final c in _columns) c.field: c};
+  Map<String, GridColumn<T>>? _byField;
 
-  GridColumn<T>? column(String field) =>
-      _columns.where((c) => c.field == field).firstOrNull;
+  /// The columns by field.
+  ///
+  /// Cached, because this is read on paths that run per cell: conditional
+  /// formatting over a 40x200 viewport asked for a column 8,000 times a
+  /// frame, and both this and [column] walked or rebuilt the whole list every
+  /// time - 13.5ms of a 16.7ms frame. The cache is dropped whenever the
+  /// columns change.
+  Map<String, GridColumn<T>> get columnsByField =>
+      _byField ??= {for (final c in _columns) c.field: c};
+
+  GridColumn<T>? column(String field) => columnsByField[field];
+
+  /// Drops the by-field cache. Called by everything that changes [_columns].
+  void _columnsChanged() => _byField = null;
 
   LatticeDataSource<T> get dataSource => _dataSource;
 
@@ -267,6 +307,26 @@ class GridController<T> with GridChangeNotifier {
   Filter? get filter => _filter;
   Map<String, FilterCondition> get columnFilters =>
       Map.unmodifiable(_columnFilters);
+
+  /// Fields that something in the current state refers to and the grid has no
+  /// column for.
+  ///
+  /// Those filters, sorts and groupings are kept but left out of the query,
+  /// so an adapter can offer to clear them - the header they belonged to is
+  /// gone, so the user cannot.
+  Set<String> get inactiveFields {
+    final known = columnsByField;
+    return {
+      for (final field in {
+        ...?_filter?.fields,
+        ..._columnFilters.keys,
+        for (final s in _sorts) s.field,
+        for (final g in _groups) g.field,
+      })
+        if (!known.containsKey(field)) field,
+    };
+  }
+
   String get search => _search;
 
   /// The rows to render, group headers included.
@@ -289,6 +349,13 @@ class GridController<T> with GridChangeNotifier {
   /// Error thrown by the last fetch, if it failed.
   Object? get error => _error;
 
+  /// Whether the rows on screen are left over from before a failed fetch.
+  ///
+  /// Only ever true with [keepRowsOnError] set, which is the mode that asks
+  /// for exactly that. Without it a failed fetch clears the result, so the
+  /// counts and aggregates cannot go on describing rows that are gone.
+  bool get isStale => _error != null && _result != null;
+
   bool get isGrouped => _groups.isNotEmpty;
 
   bool get isEmpty => !_loading && _visibleRows.isEmpty;
@@ -301,9 +368,15 @@ class GridController<T> with GridChangeNotifier {
   int? get pageSize => _pageSize;
   int get pageIndex => _pageIndex;
 
+  /// How many pages the current result has.
+  ///
+  /// Always 1 while grouped: grouping needs every matching row, because a
+  /// header counts its group, so [query] asks for all of them and paging has
+  /// nothing to turn. Advertising three pages that `nextPage` could not turn
+  /// was worse than saying there is one.
   int get pageCount {
     final size = _pageSize;
-    if (size == null || size <= 0) return 1;
+    if (size == null || size <= 0 || isGrouped) return 1;
     final count = (matchedCount / size).ceil();
     return count < 1 ? 1 : count;
   }
@@ -335,14 +408,24 @@ class GridController<T> with GridChangeNotifier {
 
   /// The query the current state describes.
   GridQuery get query {
+    final known = columnsByField;
+    bool isKnown(String field) => known.containsKey(field);
     final conditions = <Filter>[
-      if (_filter != null) _filter!,
+      // A filter on a column that is no longer here would test a field no
+      // row answers to, which hides every row - and with the header gone
+      // there is nothing left to clear it from. The condition is kept in
+      // state and left out of the query, so putting the column back brings
+      // its filter back too.
+      if (pruneFilter(_filter, isKnown) case final pruned?) pruned,
       for (final condition in _columnFilters.values)
-        if (!condition.isEmpty) condition,
+        if (!condition.isEmpty && isKnown(condition.field)) condition,
     ];
     final size = _pageSize;
     return GridQuery(
-      sorts: _sorts,
+      sorts: [
+        for (final sort in _sorts)
+          if (isKnown(sort.field)) sort,
+      ],
       filter: conditions.isEmpty
           ? null
           : (conditions.length == 1
@@ -353,18 +436,24 @@ class GridController<T> with GridChangeNotifier {
         for (final c in visibleColumns)
           if (c.filterable) c.field,
       ],
-      groups: _groups,
+      groups: [
+        for (final group in _groups)
+          if (isKnown(group.field)) group,
+      ],
       aggregations: _aggregations,
-      // Infinite mode always asks from the top for everything loaded so far,
-      // so a re-sort or a new filter rebuilds the accumulated list rather
-      // than leaving slices that were ordered under the old query.
-      offset: isInfinite || size == null || size <= 0 || isGrouped
-          ? 0
-          : _pageIndex * size,
+      // Infinite mode asks for one slice at a time, from where the last one
+      // ended. It used to ask from the top for everything loaded so far, so
+      // ten slices of 100 transferred 5,500 rows to show 1,000 - O(n^2)
+      // against a remote API, and the whole list re-sorted on every scroll.
+      // A query change starts again from the top, because a slice fetched
+      // under the old order describes rows that are no longer there.
+      offset: isInfinite
+          ? (_appending ? _loadedRows.length : 0)
+          : (size == null || size <= 0 || isGrouped ? 0 : _pageIndex * size),
       limit: isGrouped
           ? null
           : (isInfinite
-              ? _loadedCount
+              ? loadMoreSize
               : (size != null && size > 0 ? size : null)),
       lazyGroups: isLazilyGrouped,
     );
@@ -407,7 +496,16 @@ class GridController<T> with GridChangeNotifier {
     }
     _debounceTimer?.cancel();
     _debounceTimer = null;
-    return _fetch();
+    // A direct refresh answers the coalesced one too. Cancelling the timer
+    // without completing the future left every caller awaiting the debounced
+    // refresh hanging forever.
+    final pending = _debounced;
+    _debounced = null;
+    final fetch = _fetch();
+    if (pending == null) return fetch;
+    return fetch.whenComplete(() {
+      if (!pending.isCompleted) pending.complete();
+    });
   }
 
   Timer? _debounceTimer;
@@ -419,10 +517,20 @@ class GridController<T> with GridChangeNotifier {
 
   // -- Loading more ---------------------------------------------------------
 
-  /// How many rows the current query asks for in infinite mode: one slice to
-  /// begin with, and one more per [loadMore].
-  int _loadedCount = 0;
+  /// Rows gathered so far in infinite mode, slice by slice.
+  List<T> _loadedRows = const [];
+
+  /// Whether the fetch being built is appending a slice rather than starting
+  /// the list again.
+  bool _appending = false;
+
+  /// Whether the source has said there is nothing left.
+  bool _exhausted = false;
+
   bool _loadingMore = false;
+
+  /// How many rows have been gathered in infinite mode.
+  int get loadedRowCount => _loadedRows.length;
 
   /// Whether a [loadMore] is in flight, for a spinner at the tail.
   bool get isLoadingMore => _loadingMore;
@@ -432,12 +540,12 @@ class GridController<T> with GridChangeNotifier {
   /// False while one request is already out, so a scroll that reaches the end
   /// twice in two frames asks once.
   bool get canLoadMore {
-    if (!isInfinite || isGrouped || _loadingMore) return false;
+    if (!isInfinite || isGrouped || _loadingMore || _exhausted) return false;
     final capabilities = _dataSource.capabilities;
     if (!capabilities.supportsLoadMore) return false;
     // A local source knows its own total; a remote one answers for itself.
-    if (capabilities.isLocal) return _loadedCount < matchedCount;
-    return _dataSource.hasMore || _loadedCount < matchedCount;
+    if (capabilities.isLocal) return _loadedRows.length < matchedCount;
+    return _dataSource.hasMore || _loadedRows.length < matchedCount;
   }
 
   /// Appends another slice of rows.
@@ -448,11 +556,12 @@ class GridController<T> with GridChangeNotifier {
   Future<void> loadMore() async {
     if (!canLoadMore) return;
     _loadingMore = true;
-    _loadedCount += loadMoreSize!;
+    _appending = true;
     notifyListeners(changes: const {GridChange.status});
     try {
       await _fetch();
     } finally {
+      _appending = false;
       _loadingMore = false;
       if (!isDisposed) {
         notifyListeners(changes: const {GridChange.status});
@@ -468,7 +577,10 @@ class GridController<T> with GridChangeNotifier {
   /// longer in those positions.
   void _resetPaging() {
     _pageIndex = 0;
-    if (isInfinite) _loadedCount = loadMoreSize!;
+    if (isInfinite) {
+      _loadedRows = const [];
+      _exhausted = false;
+    }
   }
 
   /// Drops back to the first slice, as a pull-to-refresh does.
@@ -476,7 +588,18 @@ class GridController<T> with GridChangeNotifier {
   /// The gesture belongs to the adapter; what it means - forget what was
   /// accumulated and ask again - belongs here.
   Future<void> reload() {
-    if (isInfinite) _loadedCount = loadMoreSize!;
+    if (isInfinite) {
+      _loadedRows = const [];
+      _exhausted = false;
+    }
+    // Everything fetched a piece at a time is refetched too, keeping which
+    // branches and groups are open: reload used to leave a lazy tree showing
+    // the children it had already loaded, whatever the server now held.
+    _loadedGroups.clear();
+    _groupErrors.clear();
+    _loadingGroups.clear();
+    _loadedChildren.clear();
+    _childErrors.clear();
     _dataSource.bumpRevision();
     return refresh();
   }
@@ -511,30 +634,102 @@ class GridController<T> with GridChangeNotifier {
       if (token != _fetchToken || isDisposed) return;
       _loading = false;
       // The groups the source just sent supersede anything cached for the
-      // query they replace.
+      // query they replace - including loads still in flight, which answer
+      // the query the user has moved on from.
       _loadedGroups.clear();
       _groupErrors.clear();
+      _loadingGroups.clear();
       _apply(result);
-    } on FetchCancelled {
-      // A cancelled fetch has no answer and is not a failure: the refresh
-      // that replaced it owns the state now.
-      return;
+    } on FetchCancelled catch (error) {
+      // A fetch the grid itself cancelled has no answer and is not a failure:
+      // the refresh that replaced it owns the state now. One the grid did
+      // *not* cancel is a real failure dressed as a cancellation - a source
+      // that maps an aborted HTTP call onto FetchCancelled - and swallowing
+      // it left the spinner running for good.
+      if (token != _fetchToken || isDisposed) return;
+      if (signal.isCancelled) return;
+      _loading = false;
+      _error = error;
+      if (!keepRowsOnError) _clearResult();
+      notifyListeners(changes: const {GridChange.rows, GridChange.status});
     } catch (error) {
       if (token != _fetchToken || isDisposed) return;
       _loading = false;
       _error = error;
-      if (!keepRowsOnError) _visibleRows = const [];
+      if (!keepRowsOnError) _clearResult();
       notifyListeners(changes: const {GridChange.rows, GridChange.status});
     }
   }
 
-  void _apply(GridResult<T> result) {
+  /// Forgets the last result, so nothing describes rows that are not shown.
+  ///
+  /// A failed fetch used to empty the rows and keep `_result`, so the footer
+  /// still read "6 rows" and the aggregates still summed the rows that had
+  /// just disappeared.
+  /// Guards the re-slice in [_apply] against recursion.
+  bool _reslicing = false;
+
+  /// Folds an incoming slice into the rows gathered so far.
+  ///
+  /// A slice shorter than asked for means the source has run out, which is
+  /// how a backend that cannot report a total says "that is all".
+  GridResult<T> _accumulate(GridResult<T> incoming) {
+    final slice = loadMoreSize!;
+    if (_appending) {
+      _loadedRows = [..._loadedRows, ...incoming.rows];
+    } else {
+      _loadedRows = incoming.rows;
+    }
+    if (incoming.rows.length < slice) _exhausted = true;
+    return GridResult<T>(
+      rows: _loadedRows,
+      totalCount: incoming.totalCount,
+      filteredCount: incoming.filteredCount,
+      groups: incoming.groups,
+      aggregates: incoming.aggregates,
+      stats: incoming.stats,
+      sourceIndexOf: incoming.sourceIndexOf,
+    );
+  }
+
+  void _clearResult() {
+    _result = null;
+    _visibleRows = const [];
+    _loadedGroups.clear();
+    _loadingGroups.clear();
+  }
+
+  void _apply(GridResult<T> incoming) {
     // Read the identities the user is pointing at before the rows change
     // under them.
     final tracked = _trackedRowKeys();
 
+    final result = isInfinite ? _accumulate(incoming) : incoming;
     _result = result;
-    _visibleRows = _rowsFor(result);
+
+    // The page the user is on may no longer exist: rows removed elsewhere, or
+    // a filter that now matches less, left pageIndex past pageCount and the
+    // grid showing nothing at all while rows sat on an earlier page. A
+    // synchronous source can re-slice now; a remote one is asked again.
+    var applied = result;
+    final lastPage = pageCount - 1;
+    if (_pageIndex > lastPage) {
+      _pageIndex = lastPage < 0 ? 0 : lastPage;
+      if (_dataSource.isSynchronous && !_reslicing) {
+        _reslicing = true;
+        try {
+          applied = _dataSource.fetchSync(query);
+          _result = applied;
+        } finally {
+          _reslicing = false;
+        }
+      } else if (!_reslicing) {
+        scheduleMicrotask(() {
+          if (!isDisposed) refresh();
+        });
+      }
+    }
+    _visibleRows = _rowsFor(applied);
 
     if (tracked != null) {
       final positions = _rowPositions();
@@ -644,21 +839,34 @@ class GridController<T> with GridChangeNotifier {
 
   Future<void> _loadGroup(GroupNode<T> node) async {
     final source = _dataSource;
-    final pending = query;
+    final generation = _sourceGeneration;
+    final token = _fetchToken;
+    final signal = FetchSignal();
+    final pending = query.copyWith(signal: signal);
     try {
       final children = await source.fetchGroupChildren(pending, node);
-      if (isDisposed || source != _dataSource) return;
+      // The answer describes the query that asked for it. A search or a
+      // filter that landed while this was in flight makes it an answer to a
+      // question nobody is asking any more, and grafting it onto the new
+      // headers showed pre-search rows after the search.
+      if (isDisposed ||
+          source != _dataSource ||
+          generation != _sourceGeneration ||
+          token != _fetchToken) {
+        return;
+      }
       _loadedGroups[node.path] = children;
     } on FetchCancelled {
       return;
     } catch (error) {
-      if (isDisposed) return;
+      if (isDisposed || generation != _sourceGeneration) return;
+      if (token != _fetchToken) return;
       // A group that would not load is a failure of this group, not of the
       // grid: the other groups are still good.
       _groupErrors[node.path] = error;
     } finally {
       _loadingGroups.remove(node.path);
-      if (!isDisposed) _rebuildRows();
+      if (!isDisposed && generation == _sourceGeneration) _rebuildRows();
     }
   }
 
@@ -682,31 +890,62 @@ class GridController<T> with GridChangeNotifier {
     final key = rowKey;
     final hasDetails =
         details != null && key != null && _openDetails.isNotEmpty;
+    final substitute = _pendingWrites.isEmpty ? null : _substituteWrite;
+    final sourceIndexOf = result.sourceIndexOf;
 
     if (result.isGrouped) {
+      // Pending writes are substituted into the tree before it is flattened.
+      // Doing it only in the flat row lists meant an optimistic edit was
+      // invisible in a grouped or tree grid: the cell showed the old value
+      // until the server answered, which is the whole thing the overlay
+      // exists to prevent.
+      var groups = _mergeLoadedGroups(result.groups);
+      if (substitute != null) {
+        groups = [for (final node in groups) node.mapRows(substitute)];
+      }
+      if (!hasDetails) {
+        // Lazy: a toggle rebuilds an index over the groups, not a wrapper per
+        // visible row. See [GroupedRowList].
+        return GroupedRowList<T>(
+          groups,
+          expansion,
+          loadingPaths: _loadingGroups,
+          sourceIndexOf: sourceIndexOf,
+        );
+      }
+      // Detail panels are interleaved into a materialised list; a grid with
+      // panels open is a grid with few enough rows for that to be fine.
       final rows = flattenGroups<T>(
-        _mergeLoadedGroups(result.groups),
+        groups,
         expansion,
         loadingPaths: _loadingGroups,
+        sourceIndexOf: sourceIndexOf,
       );
-      return hasDetails
-          ? withDetailRows<T>(
-              rows,
-              open: _openDetails,
-              height: details,
-              keyOf: key,
-            )
-          : rows;
+      return withDetailRows<T>(
+        rows,
+        open: _openDetails,
+        height: details,
+        keyOf: key,
+      );
     }
 
     if (hierarchy != null) {
       final rows = flattenTree<T>(
-        rows: result.rows,
+        rows: substitute == null
+            ? result.rows
+            : [for (final row in result.rows) substitute(row)],
         spec: hierarchy,
         keyOf: rowKey!,
         expansion: treeExpansion,
         loadedChildren: _loadedChildren,
         loadingKeys: _loadingChildren,
+        substitute: substitute,
+        sourceIndexOf: sourceIndexOf,
+        // A nested model's children never reach the data source, so the sort
+        // has to be applied to each level as the tree is flattened.
+        childComparator: _sorts.isEmpty || !hierarchy.isNested
+            ? null
+            : buildComparator<T>(_sorts, columnsByField),
       );
       return hasDetails
           ? withDetailRows<T>(
@@ -718,7 +957,6 @@ class GridController<T> with GridChangeNotifier {
           : rows;
     }
 
-    final substitute = _pendingWrites.isEmpty ? null : _substituteWrite;
     if (!hasDetails) {
       // Lazy: an ungrouped 50k-row grid must not allocate 50k wrappers on
       // every change. See [LazyDataRowList].
@@ -726,6 +964,7 @@ class GridController<T> with GridChangeNotifier {
         result.rows,
         offset: query.offset,
         substitute: substitute,
+        sourceIndexOf: sourceIndexOf,
       );
     }
     // Still lazy with panels open: the positions are resolved arithmetically
@@ -740,6 +979,7 @@ class GridController<T> with GridChangeNotifier {
       keyOf: key,
       offset: query.offset,
       substitute: substitute,
+      sourceIndexOf: sourceIndexOf,
     );
   }
 
@@ -751,7 +991,9 @@ class GridController<T> with GridChangeNotifier {
   Map<int, Object>? _trackedRowKeys() {
     final key = rowKey;
     if (key == null) return null;
-    final indices = <int>{...selection.rows};
+    // Only the rows whose identity has to be followed: for a select-all that
+    // is the handful of exceptions, not every row in the grid.
+    final indices = <int>{...selection.followedRows};
     final active = selection.activeCell;
     if (active != null) indices.add(active.row);
     final anchor = selection.anchor;
@@ -769,7 +1011,14 @@ class GridController<T> with GridChangeNotifier {
     for (final index in indices) {
       if (index < 0 || index >= _visibleRows.length) continue;
       final row = _visibleRows[index];
-      if (row is DataGridRow<T>) out[index] = key(row.data);
+      if (row is DataGridRow<T>) {
+        out[index] = key(row.data);
+      } else if (row is GroupGridRow<T>) {
+        // A header has an identity too - its path - and keeping its raw
+        // index meant collapsing a group above it slid the selection onto a
+        // different group's header.
+        out[index] = _HeaderIdentity(row.path);
+      }
     }
     return out.isEmpty ? null : out;
   }
@@ -783,7 +1032,11 @@ class GridController<T> with GridChangeNotifier {
       final row = _visibleRows[i];
       // First occurrence wins, so a duplicated key degrades to the topmost
       // row rather than to an arbitrary one.
-      if (row is DataGridRow<T>) out.putIfAbsent(key(row.data), () => i);
+      if (row is DataGridRow<T>) {
+        out.putIfAbsent(key(row.data), () => i);
+      } else if (row is GroupGridRow<T>) {
+        out.putIfAbsent(_HeaderIdentity(row.path), () => i);
+      }
     }
     return out;
   }
@@ -904,11 +1157,9 @@ class GridController<T> with GridChangeNotifier {
     _rebuildRows();
   }
 
+  /// Closes every group, including ones not yet on screen.
   void collapseAllGroups() {
-    final result = _result;
-    expansion.collapseAll(
-      result == null ? const [] : collectGroupPaths<T>(result.groups),
-    );
+    expansion.collapseAll();
     _rebuildRows();
   }
 
@@ -985,19 +1236,20 @@ class GridController<T> with GridChangeNotifier {
     Object key,
     Future<List<T>> Function(T row) loader,
   ) async {
+    final generation = _sourceGeneration;
     try {
       final children = await loader(row);
-      if (isDisposed) return;
+      if (isDisposed || generation != _sourceGeneration) return;
       _loadedChildren[key] = children;
     } on FetchCancelled {
       return;
     } catch (error) {
-      if (isDisposed) return;
+      if (isDisposed || generation != _sourceGeneration) return;
       // One branch that would not load is not a failure of the grid.
       _childErrors[key] = error;
     } finally {
-      _loadingChildren.remove(key);
-      if (!isDisposed) _reapply();
+      if (generation == _sourceGeneration) _loadingChildren.remove(key);
+      if (!isDisposed && generation == _sourceGeneration) _reapply();
     }
   }
 
@@ -1012,6 +1264,15 @@ class GridController<T> with GridChangeNotifier {
     _reapply();
   }
 
+  /// The [DataGridRow.treePath] of the row with this [rowKey].
+  ///
+  /// A branch is remembered by its own key rather than by the chain of its
+  /// ancestors - repeating the ancestors made the paths grow quadratically
+  /// with depth - and the key is encoded with its type so that `1` and `'1'`
+  /// cannot name the same branch. Use this rather than assembling a path, or
+  /// read [DataGridRow.treePath] from the row itself.
+  String treePathFor(Object key) => pathKeySegment(key);
+
   void expandAllRows() {
     treeExpansion.expandAll();
     _reapply();
@@ -1019,21 +1280,17 @@ class GridController<T> with GridChangeNotifier {
 
   /// Closes every branch, including ones the user has never opened.
   void collapseAllRows() {
-    final hierarchy = tree;
-    final result = _result;
-    if (hierarchy == null || result == null) return;
-    treeExpansion.collapseAll(collectTreePaths<T>(
-      rows: result.rows,
-      spec: hierarchy,
-      keyOf: rowKey!,
-    ));
+    if (tree == null) return;
+    treeExpansion.collapseAll();
     _reapply();
   }
 
   // -- Columns --------------------------------------------------------------
 
   void setColumns(List<GridColumn<T>> columns) {
+    assert(_noDuplicateFields(columns));
     _columns = List<GridColumn<T>>.of(columns);
+    _columnsChanged();
     _dataSource.columns = columnsByField;
     // New columns change the geometry as well as the rows, and the batch
     // unions the two into one notification rather than two rebuilds.
@@ -1140,6 +1397,7 @@ class GridController<T> with GridChangeNotifier {
     final index = _columns.indexWhere((c) => c.field == field);
     if (index < 0 || _columns[index].visible == visible) return;
     _columns[index] = _columns[index].copyWith(visible: visible);
+    _columnsChanged();
     batch(() {
       notifyListeners(changes: const {GridChange.layout});
       // A hidden column leaves the search fields, so the rows can change too.
@@ -1151,15 +1409,42 @@ class GridController<T> with GridChangeNotifier {
     final index = _columns.indexWhere((c) => c.field == field);
     if (index < 0 || _columns[index].pin == pin) return;
     _columns[index] = _columns[index].copyWith(pin: pin);
+    _columnsChanged();
     notifyListeners(changes: const {GridChange.layout});
   }
 
   /// Moves a column to a new position in display order.
+  /// Moves [field] to [newIndex] in *display* order.
+  ///
+  /// Display order is what the user drags in, and it is not the declaration
+  /// order: a hidden column takes a slot in the list and none on screen, so
+  /// moving to index 2 used to land at display position 1 whenever a hidden
+  /// column sat before it.
+  ///
+  /// Pinning still wins: a pinned band is drawn as a band whatever the
+  /// declaration order says, so a column cannot be dragged out of its band
+  /// without being unpinned first. Within a band this is exact.
   void moveColumn(String field, int newIndex) {
     final from = _columns.indexWhere((c) => c.field == field);
     if (from < 0) return;
-    final column = _columns.removeAt(from);
-    _columns.insert(newIndex.clamp(0, _columns.length), column);
+    final moved = _columns[from];
+    final rest = [
+      for (final column in visibleColumns)
+        if (column.field != field) column.field,
+    ];
+    final target =
+        newIndex < 0 ? 0 : (newIndex > rest.length ? rest.length : newIndex);
+    _columns.removeAt(from);
+    final int insertAt;
+    if (rest.isEmpty) {
+      insertAt = from > _columns.length ? _columns.length : from;
+    } else if (target >= rest.length) {
+      insertAt = _columns.indexWhere((c) => c.field == rest.last) + 1;
+    } else {
+      insertAt = _columns.indexWhere((c) => c.field == rest[target]);
+    }
+    _columns.insert(insertAt < 0 ? _columns.length : insertAt, moved);
+    _columnsChanged();
     notifyListeners(changes: const {GridChange.layout});
   }
 
@@ -1333,6 +1618,10 @@ class GridController<T> with GridChangeNotifier {
     bool backwards = false,
     bool wrap = true,
   }) {
+    // A column with a setter is only editable if the source can save it -
+    // the same door beginEdit refuses at. Walking into cells that cannot be
+    // edited gave the user a tab order to nowhere.
+    if (!canEdit) return null;
     final fields = [
       for (final column in visibleColumns)
         if (column.editable) column.field,
@@ -1429,15 +1718,23 @@ class GridController<T> with GridChangeNotifier {
   }
 
   /// The rows pinned to the top, in display order.
+  ///
+  /// A read-only [RowSlice] onto [visibleRows], not a copy: copying a window
+  /// onto a lazy row list builds every row in it, and an adapter reads these
+  /// bands every frame.
   List<GridRow<T>> get frozenTopRows =>
-      _visibleRows.sublist(0, effectiveFrozenTop);
+      RowSlice<T>(_visibleRows, 0, effectiveFrozenTop);
 
   /// The rows pinned to the bottom, in display order.
-  List<GridRow<T>> get frozenBottomRows =>
-      _visibleRows.sublist(_visibleRows.length - effectiveFrozenBottom);
+  List<GridRow<T>> get frozenBottomRows => RowSlice<T>(
+        _visibleRows,
+        _visibleRows.length - effectiveFrozenBottom,
+        _visibleRows.length,
+      );
 
   /// The rows that actually scroll, between the two frozen bands.
-  List<GridRow<T>> get scrollableRows => _visibleRows.sublist(
+  List<GridRow<T>> get scrollableRows => RowSlice<T>(
+        _visibleRows,
         effectiveFrozenTop,
         _visibleRows.length - effectiveFrozenBottom,
       );
@@ -1457,9 +1754,12 @@ class GridController<T> with GridChangeNotifier {
   ColumnStats statsFor(String field) =>
       _result?.stats[field] ?? _dataSource.statsFor(field);
 
-  /// The distinct values of [field] among the matching rows, for a checkbox
-  /// filter list. Empty when the source cannot answer.
-  List<Object?> distinctValuesFor(String field, {int limit = 500}) =>
+  /// The distinct values of [field] for a checkbox filter list, computed over
+  /// the rows that match every filter except this column's own.
+  ///
+  /// Empty when the source cannot answer.
+  /// [DistinctValues.truncated] says whether there were more than [limit].
+  DistinctValues distinctValuesFor(String field, {int limit = 500}) =>
       _dataSource.distinctValuesFor(field, limit: limit);
 
   /// The filter operators worth offering for [field], most useful first.
@@ -1540,25 +1840,41 @@ class GridController<T> with GridChangeNotifier {
       notifyListeners(changes: const {GridChange.edit});
       return result;
     }
-    if (session.value != session.originalValue) {
-      _history.record(EditAction<T>(
-        label: 'Edit ${session.column.title}',
-        changes: [
-          CellEdit<T>(
-            row: row,
-            field: session.cell.field,
-            before: session.originalValue,
-            after: session.value,
-          ),
-        ],
-      ));
+    if (session.value == session.originalValue) {
+      // Nothing changed, so there is nothing to save and nothing to undo.
+      // Writing anyway sent a request to the server and refetched the grid
+      // for a cell the user had only looked at.
+      notifyListeners(changes: const {GridChange.edit});
+      return result;
     }
-    _pendingWrite = _write(session.row, row);
+    _history.record(EditAction<T>(
+      label: 'Edit ${session.column.title}',
+      changes: [
+        CellEdit<T>(
+          row: row,
+          field: session.cell.field,
+          before: session.originalValue,
+          after: session.value,
+        ),
+      ],
+    ));
+    _pendingWrite = _write(
+      session.row,
+      row,
+      before: {session.cell.field: session.originalValue},
+    );
     return result;
   }
 
   /// Rows written but not yet confirmed by the source, keyed by identity.
-  final Map<Object, T> _pendingWrites = {};
+  ///
+  /// Each entry remembers which write owns it, so that a write finishing
+  /// cannot clear the entry a newer write for the same row has since put
+  /// there. It used to remove the key unconditionally, which made a slow
+  /// first write wipe the second one: the cell went back to showing the
+  /// first value while the second was still in flight.
+  final Map<Object, _PendingWrite<T>> _pendingWrites = {};
+  int _writeSequence = 0;
   Object? _writeError;
   Future<void>? _pendingWrite;
 
@@ -1590,10 +1906,17 @@ class GridController<T> with GridChangeNotifier {
   /// an immutable model wants a [rowKey].
   Object _identityOf(T row) => rowKey?.call(row) ?? row as Object;
 
-  T _substituteWrite(T row) => _pendingWrites[_identityOf(row)] ?? row;
+  T _substituteWrite(T row) => _pendingWrites[_identityOf(row)]?.row ?? row;
 
-  Future<void> _write(T original, T updated) =>
-      _writeAll([RowUpdate<T>(original, updated)]);
+  Future<void> _write(
+    T original,
+    T updated, {
+    Map<String, Object?>? before,
+  }) =>
+      _writeAll(
+        [RowUpdate<T>(original, updated)],
+        before: before == null ? null : [before],
+      );
 
   /// Sends committed rows to the source, showing them immediately and rolling
   /// them back if the source refuses them.
@@ -1601,7 +1924,15 @@ class GridController<T> with GridChangeNotifier {
   /// One call is one change: a paste across twenty rows goes down as a single
   /// batch and the grid re-queries once, because twenty write-through
   /// refreshes would also be twenty re-sorts.
-  Future<void> _writeAll(List<RowUpdate<T>> writes) async {
+  ///
+  /// [before] holds each row's previous values by field, which is what a
+  /// rollback needs for a model whose setter mutates in place: dropping the
+  /// overlay puts the *overlay* back, not the row, and the object stayed
+  /// mutated with the value the source had just refused.
+  Future<void> _writeAll(
+    List<RowUpdate<T>> writes, {
+    List<Map<String, Object?>>? before,
+  }) async {
     if (writes.isEmpty) return;
     final source = _dataSource;
     if (!source.canCommit) {
@@ -1622,37 +1953,71 @@ class GridController<T> with GridChangeNotifier {
         await source.commitAll(writes);
       } catch (error) {
         if (isDisposed) return;
+        _rollback(writes, before);
         _writeError = error;
-        notifyListeners(changes: const {GridChange.status});
+        notifyListeners(changes: const {GridChange.rows, GridChange.status});
       }
       return;
     }
 
+    final sequence = ++_writeSequence;
     final keys = [for (final write in writes) _identityOf(write.original)];
     for (var i = 0; i < writes.length; i++) {
-      _pendingWrites[keys[i]] = writes[i].updated;
+      _pendingWrites[keys[i]] = _PendingWrite<T>(writes[i].updated, sequence);
     }
     _writeError = null;
     _reapply();
+
+    /// Drops only the entries this write still owns.
+    void releaseOwn() {
+      for (final key in keys) {
+        if (_pendingWrites[key]?.sequence == sequence) {
+          _pendingWrites.remove(key);
+        }
+      }
+    }
+
     try {
       final stored = await source.commitAll(writes);
       if (isDisposed) return;
-      // The source may have normalised the values; show what it returned.
+      // The source may have normalised the values; show what it returned -
+      // unless a newer write for the same row has taken the slot, in which
+      // case the newer value is the one on screen and the one to keep.
       for (var i = 0; i < keys.length && i < stored.length; i++) {
-        _pendingWrites[keys[i]] = stored[i];
+        if (_pendingWrites[keys[i]]?.sequence == sequence) {
+          _pendingWrites[keys[i]] = _PendingWrite<T>(stored[i], sequence);
+        }
       }
       // Re-query, so an edit that changed a sort or filter key moves its row.
       // The pending values cover the gap until the source's own copies carry
       // them.
       await refresh();
       if (isDisposed) return;
-      keys.forEach(_pendingWrites.remove);
+      releaseOwn();
       _reapply();
     } catch (error) {
       if (isDisposed) return;
-      keys.forEach(_pendingWrites.remove);
+      releaseOwn();
+      _rollback(writes, before);
       _writeError = error;
       _reapply();
+    }
+  }
+
+  /// Puts the previous values back through the columns' setters.
+  ///
+  /// For an immutable model this is a no-op in effect - the setter returns a
+  /// copy and the row the source holds was never touched - and for a model
+  /// that mutates in place it is the only way back: the row object itself
+  /// carries the refused value until something overwrites it.
+  void _rollback(
+      List<RowUpdate<T>> writes, List<Map<String, Object?>>? before) {
+    if (before == null) return;
+    final byField = columnsByField;
+    for (var i = 0; i < writes.length && i < before.length; i++) {
+      for (final entry in before[i].entries) {
+        byField[entry.key]?.setValue?.call(writes[i].original, entry.value);
+      }
     }
   }
 
@@ -1711,13 +2076,23 @@ class GridController<T> with GridChangeNotifier {
     final slots = <Object, int>{};
     var clipped = 0;
 
+    // A group header or a detail panel is not a row that can be written to,
+    // and the clipboard row aimed at it belongs to the next row that can:
+    // treating it as "no row here" dropped a row of the user's data in the
+    // middle of a paste, silently.
+    var cursor = target.row;
     for (var r = 0; r < block.length; r++) {
-      final rowIndex = target.row + r;
+      while (cursor < _visibleRows.length &&
+          _visibleRows[cursor] is! DataGridRow<T>) {
+        cursor++;
+      }
+      final rowIndex = cursor;
       final data = dataAt(rowIndex);
       if (data == null) {
         clipped += block[r].length;
         continue;
       }
+      cursor++;
       final identity = _identityOf(data);
       for (var c = 0; c < block[r].length; c++) {
         final columnIndex = firstColumn + c;
@@ -1780,7 +2155,8 @@ class GridController<T> with GridChangeNotifier {
     }
 
     _history.record(EditAction<T>(label: 'Paste', changes: changes));
-    _pendingWrite = _writeAll(_updatesFor(patches));
+    final before = _beforeValuesFor(patches);
+    _pendingWrite = _writeAll(_updatesFor(patches), before: before);
     notifyListeners(changes: const {GridChange.rows, GridChange.status});
     return PasteResult(
       rowsChanged: patches.length,
@@ -1794,6 +2170,18 @@ class GridController<T> with GridChangeNotifier {
   List<RowUpdate<T>> _updatesFor(List<_RowPatch<T>> patches) => [
         for (final patch in patches)
           RowUpdate<T>(patch.row, _withValues(patch.row, patch.values)),
+      ];
+
+  /// The values each patch is about to overwrite, by field.
+  ///
+  /// Read before the setters run, because a setter that mutates in place
+  /// destroys the only copy of them.
+  List<Map<String, Object?>> _beforeValuesFor(List<_RowPatch<T>> patches) => [
+        for (final patch in patches)
+          {
+            for (final field in patch.values.keys)
+              field: column(field)?.value(patch.row),
+          },
       ];
 
   /// Applies several cell values to one row, through the columns' setters.
@@ -1823,27 +2211,64 @@ class GridController<T> with GridChangeNotifier {
 
   /// Takes back the last committed edit or paste, as one step.
   ///
-  /// Returns false when there is nothing to undo, or when the rows an action
-  /// touched can no longer be found - deleted, or filtered out of the current
-  /// view. Finding them needs either a [rowKey] or a row model whose setter
-  /// mutates in place; an immutable model without a key cannot be matched to
-  /// the instances the source now holds.
-  bool undo() => _replay(_history.takeUndo()?.inverse);
+  /// Returns false when there is nothing to undo, or when not one of the rows
+  /// the action touched could be found. The history is only moved when
+  /// something was actually written, so an undo that cannot be applied leaves
+  /// the step where it was rather than consuming it - which used to make the
+  /// edit permanently unrepeatable, with `canUndo` false and `canRedo` true.
+  ///
+  /// Rows are resolved through the data source, not through what is on
+  /// screen, so an undo reaches a row on another page, inside a closed group
+  /// or filtered out of view. A source that pages a backend cannot offer that
+  /// - see [LatticeDataSource.localRows] - and [lastReplay] then says how
+  /// many cells were skipped.
+  bool undo() {
+    final action = _history.peekUndo();
+    if (action == null) return false;
+    final outcome = _replay(action.inverse);
+    if (!outcome.didAnything) return false;
+    _history.commitUndo();
+    return true;
+  }
 
   /// Re-applies the edit [undo] took back.
-  bool redo() => _replay(_history.takeRedo());
+  bool redo() {
+    final action = _history.peekRedo();
+    if (action == null) return false;
+    final outcome = _replay(action);
+    if (!outcome.didAnything) return false;
+    _history.commitRedo();
+    return true;
+  }
 
   bool get canUndo => _history.canUndo;
   bool get canRedo => _history.canRedo;
 
-  bool _replay(EditAction<T>? action) {
-    if (action == null || action.isEmpty) return false;
+  ReplayOutcome _lastReplay = const ReplayOutcome.nothing();
+
+  /// What came of the last [undo] or [redo]: how many cells were written and
+  /// how many could not be found.
+  ///
+  /// A partial undo is a real outcome - some of the rows an action touched
+  /// may be gone - and a bare bool could not report it.
+  ReplayOutcome get lastReplay => _lastReplay;
+
+  ReplayOutcome _replay(EditAction<T>? action) {
+    if (action == null || action.isEmpty) {
+      return _lastReplay = const ReplayOutcome.nothing();
+    }
     final patches = <_RowPatch<T>>[];
     final slots = <Object, int>{};
+    var applied = 0;
+    var unresolved = 0;
 
     for (final change in action.changes) {
       final current = _currentRowFor(change.row);
-      if (current == null) continue;
+      if (current == null) {
+        unresolved++;
+        continue;
+      }
+      applied++;
       final identity = _identityOf(current);
       var slot = slots[identity];
       if (slot == null) {
@@ -1853,25 +2278,64 @@ class GridController<T> with GridChangeNotifier {
       }
       patches[slot].values[change.field] = change.after;
     }
-    if (patches.isEmpty) return false;
+    if (patches.isEmpty) {
+      return _lastReplay = ReplayOutcome(applied: 0, unresolved: unresolved);
+    }
 
-    _pendingWrite = _writeAll(_updatesFor(patches));
+    final before = _beforeValuesFor(patches);
+    _pendingWrite = _writeAll(_updatesFor(patches), before: before);
     notifyListeners(changes: const {GridChange.rows, GridChange.status});
-    return true;
+    return _lastReplay =
+        ReplayOutcome(applied: applied, unresolved: unresolved);
   }
 
   /// The instance the grid currently holds for [row], matched by [rowKey]
   /// where there is one.
+  ///
+  /// Looks through the data source rather than through the visible rows: an
+  /// undo has to reach a row that is filtered out, on another page or inside
+  /// a closed group, and searching the view silently skipped it.
   T? _currentRowFor(T row) {
     final key = rowKey;
     if (key == null) return row;
     final wanted = key(row);
+    final index = _keyIndex();
+    if (index != null) return index[wanted];
     for (final visible in _visibleRows) {
       if (visible is DataGridRow<T> && key(visible.data) == wanted) {
         return visible.data;
       }
     }
     return null;
+  }
+
+  Map<Object, T>? _keyIndexCache;
+  int _keyIndexRevision = -1;
+  int _keyIndexGeneration = -1;
+
+  /// Every row the source holds, by [rowKey], or null when the source cannot
+  /// enumerate its rows.
+  ///
+  /// Built once per source revision and shared by everything that has to find
+  /// a row it is not showing.
+  Map<Object, T>? _keyIndex() {
+    final key = rowKey;
+    if (key == null) return null;
+    final rows = _dataSource.localRows;
+    if (rows == null) return null;
+    if (_keyIndexCache != null &&
+        _keyIndexRevision == _dataSource.revision &&
+        _keyIndexGeneration == _sourceGeneration) {
+      return _keyIndexCache;
+    }
+    final index = <Object, T>{};
+    for (final row in rows) {
+      index[key(row)] = row;
+    }
+    _keyIndexCache = index;
+    _keyIndexRevision = _dataSource.revision;
+    _keyIndexGeneration = _sourceGeneration;
+    return index;
   }
 
   void cancelEdit() {
@@ -1906,9 +2370,24 @@ class GridController<T> with GridChangeNotifier {
     final rows = <List<String>>[];
     final range = selection.range;
 
-    List<String> cellsFor(int rowIndex, List<String> fieldSet) {
+    // A group header is not a row of data. Emitting a line of empty tabs for
+    // it put a blank row at the top of the clipboard, which pastes as a blank
+    // row; the header's own label goes in the first cell instead, which is
+    // what a spreadsheet user expects of a copied outline.
+    List<String>? cellsFor(int rowIndex, List<String> fieldSet) {
+      if (rowIndex < 0 || rowIndex >= _visibleRows.length) return null;
+      final row = _visibleRows[rowIndex];
+      if (row is GroupGridRow<T>) {
+        return [
+          '${row.label} (${row.rowCount})',
+          ...List<String>.filled(
+            fieldSet.isEmpty ? 0 : fieldSet.length - 1,
+            '',
+          ),
+        ];
+      }
       final data = dataAt(rowIndex);
-      if (data == null) return List.filled(fieldSet.length, '');
+      if (data == null) return null;
       return [for (final f in fieldSet) byField[f]?.formattedValue(data) ?? ''];
     }
 
@@ -1918,14 +2397,16 @@ class GridController<T> with GridChangeNotifier {
         rows.add([for (final f in covered) byField[f]?.title ?? f]);
       }
       for (var r = range.firstRow; r <= range.lastRow; r++) {
-        rows.add(cellsFor(r, covered));
+        final cells = cellsFor(r, covered);
+        if (cells != null) rows.add(cells);
       }
     } else {
       if (includeHeader) {
         rows.add([for (final f in fields) byField[f]?.title ?? f]);
       }
       for (final index in selection.selectedRows) {
-        rows.add(cellsFor(index, fields));
+        final cells = cellsFor(index, fields);
+        if (cells != null) rows.add(cells);
       }
     }
     return toClipboardText<T>(rows);
@@ -1963,6 +2444,7 @@ class GridController<T> with GridChangeNotifier {
       frozenRowCount: _frozenRowCount,
       frozenRowCountBottom: _frozenRowCountBottom,
       columnFit: columnFit,
+      groupsExpandedByDefault: expansion.expandedByDefault,
     );
   }
 
@@ -1996,6 +2478,7 @@ class GridController<T> with GridChangeNotifier {
         if (byField.containsKey(column.field)) restored.add(column);
       }
       _columns = restored;
+      _columnsChanged();
       _dataSource.columns = columnsByField;
     }
 
@@ -2008,7 +2491,10 @@ class GridController<T> with GridChangeNotifier {
     _groups = [
       for (final g in state.groups) resolveGroup == null ? g : resolveGroup(g),
     ];
-    expansion.setOverrides(state.collapsedGroupPaths);
+    expansion.setOverrides(
+      state.collapsedGroupPaths,
+      expandedByDefault: state.groupsExpandedByDefault,
+    );
     _pageSize = state.pageSize;
     _pageIndex = state.pageIndex < 0 ? 0 : state.pageIndex;
     _frozenRowCount = state.frozenRowCount;
@@ -2016,27 +2502,90 @@ class GridController<T> with GridChangeNotifier {
     columnFit = state.columnFit;
     // One query for the whole restore: setting these one at a time would send
     // a request per property.
+    //
+    // The layout notification is part of that one change. Restoring widths,
+    // the column order and pinning is exactly a layout change, and without
+    // saying so an adapter that only relays out on GridChange.layout kept
+    // drawing the geometry the view replaced.
+    notifyListeners(changes: const {GridChange.layout});
     refresh();
   }
 
   /// Swaps the data source, e.g. from a local list to a server-backed one.
+  ///
+  /// Everything derived from the old source is dropped: its lazily loaded
+  /// groups and tree children, the errors they reported, writes still in
+  /// flight, which detail panels were open, and the undo history - whose
+  /// actions name rows this source has never heard of. A loader started for
+  /// the old source checks the generation before it answers, so a reply that
+  /// is already in the air cannot graft the old data onto the new source.
   void setDataSource(LatticeDataSource<T> source) {
     _dataSource.removeListener(_onSourceChanged);
+    _sourceGeneration++;
     _dataSource = source;
     _dataSource.columns = columnsByField;
     _dataSource.addListener(_onSourceChanged);
+    _loadedGroups.clear();
+    _groupErrors.clear();
+    _loadingGroups.clear();
+    _loadedChildren.clear();
+    _loadingChildren.clear();
+    _childErrors.clear();
+    _openDetails.clear();
+    _pendingWrites.clear();
+    _writeError = null;
+    _history.clear();
+    _cancelFetch('the data source was replaced');
     _resetPaging();
     refresh();
   }
+
+  /// Bumped by [setDataSource], so an in-flight loader can tell whether the
+  /// source it was started for is still the one on screen.
+  int _sourceGeneration = 0;
 
   @override
   void dispose() {
     _debounceTimer?.cancel();
     _debounceTimer = null;
+    // A caller awaiting a debounced refresh is owed an answer even when the
+    // answer is "never": leaving the completer pending hung that caller for
+    // the life of the isolate and leaked the test that wrote it.
+    final pending = _debounced;
+    _debounced = null;
+    if (pending != null && !pending.isCompleted) pending.complete();
     _cancelFetch('the grid was disposed');
     _dataSource.removeListener(_onSourceChanged);
     super.dispose();
   }
+}
+
+/// A group header's identity, so the selection can follow it the way it
+/// follows a data row.
+///
+/// A value type rather than the bare path string, so that a header can never
+/// be confused with a row whose key happens to be the same string.
+class _HeaderIdentity {
+  const _HeaderIdentity(this.path);
+
+  final String path;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _HeaderIdentity && other.path == path;
+
+  @override
+  int get hashCode => Object.hash('header', path);
+}
+
+/// One row written and not yet confirmed, and the write that owns it.
+class _PendingWrite<T> {
+  const _PendingWrite(this.row, this.sequence);
+
+  final T row;
+
+  /// Which write put this here, so a finishing write only clears its own.
+  final int sequence;
 }
 
 /// A row and the cell values bound for it.

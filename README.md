@@ -1,19 +1,31 @@
 <h1 align="center">Lattice</h1>
 
 <p align="center">
-  <em>A data grid that does the hard parts — frozen columns, grouping with
-  subtotals, range selection, inline editing, tens of thousands of rows —<br/>
-  and asks you for nothing. No licence key, no paid tier, no evaluation
-  banner.</em>
+  <em>An open source data grid and data table for Flutter and pure Dart.<br/>
+  It does the hard parts — frozen columns, multi-column sorting, a filter row,
+  grouping with subtotals, tree rows,<br/>virtual scrolling, range selection,
+  inline editing, CSV export — and asks you for nothing.<br/>
+  No licence key, no paid tier, no evaluation banner.</em>
 </p>
 
 <p align="center">
+  <a href="https://pub.dev/packages/lattice_core">
+    <img alt="lattice_core on pub.dev" src="https://img.shields.io/pub/v/lattice_core.svg?label=lattice_core&color=0175C2"/>
+  </a>
+  <a href="https://pub.dev/packages/lattice_core/score">
+    <img alt="pub points" src="https://img.shields.io/pub/points/lattice_core?label=pub%20points"/>
+  </a>
   <a href="https://github.com/Dhairya-007/lattice/actions/workflows/ci.yml">
     <img alt="CI" src="https://github.com/Dhairya-007/lattice/actions/workflows/ci.yml/badge.svg"/>
   </a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/licence-MIT-blue.svg"/></a>
   <img alt="Dart" src="https://img.shields.io/badge/Dart-3.8%2B-0175C2.svg"/>
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.47%2B-02569B.svg"/>
+</p>
+
+<p align="center">
+  <strong>Published on pub.dev:</strong>
+  <a href="https://pub.dev/packages/lattice_core">pub.dev/packages/lattice_core</a>
 </p>
 
 ---

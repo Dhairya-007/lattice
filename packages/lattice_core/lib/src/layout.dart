@@ -164,27 +164,36 @@ GridLayout<T> computeLayout<T>(
   if (fit != ColumnFit.none && viewportWidth > natural && visible.isNotEmpty) {
     final slack = viewportWidth - natural;
     if (fit == ColumnFit.stretch) {
-      // Grow in proportion, then hand any rounding remainder to the last
-      // growable column so the panes always add up to the viewport exactly.
-      final growable = [
+      // Water-filling: grow in proportion, and whatever a column could not
+      // take because it hit its maxWidth is offered to the columns that can
+      // still grow, round after round. Handing the whole remainder to the
+      // last growable column made one column absorb everything two clamped
+      // columns refused - [110, 200, 290] where [110, 245, 245] is what
+      // "stretch" means.
+      var remaining = slack;
+      var candidates = [
         for (final c in visible)
           if (widths[c.field]! < c.maxWidth) c,
       ];
-      final growableExtent =
-          growable.fold<double>(0, (a, c) => a + widths[c.field]!);
-      if (growableExtent > 0) {
+      // Bounded by the number of columns: each round clamps at least one, or
+      // distributes everything and stops.
+      while (remaining > 0.01 && candidates.isNotEmpty) {
+        final extent =
+            candidates.fold<double>(0, (a, c) => a + widths[c.field]!);
+        if (extent <= 0) break;
         var distributed = 0.0;
-        for (final c in growable) {
-          final share = slack * (widths[c.field]! / growableExtent);
+        for (final c in candidates) {
+          final share = remaining * (widths[c.field]! / extent);
           final grown = c.clampWidth(widths[c.field]! + share);
           distributed += grown - widths[c.field]!;
           widths[c.field] = grown;
         }
-        final remainder = slack - distributed;
-        if (remainder.abs() > 0.01) {
-          final last = growable.last;
-          widths[last.field] = last.clampWidth(widths[last.field]! + remainder);
-        }
+        if (distributed <= 0.01) break;
+        remaining -= distributed;
+        candidates = [
+          for (final c in candidates)
+            if (widths[c.field]! < c.maxWidth) c,
+        ];
       }
     } else {
       final last = visible.last;
