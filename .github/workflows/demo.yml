@@ -62,7 +62,7 @@ jobs:
         working-directory: packages/lattice_flutter/example
         run: flutter build web --release --base-href /lattice/
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         if: vars.PUBLISH_DEMO == 'true'
         with:
           path: packages/lattice_flutter/example/build/web
