@@ -397,64 +397,86 @@ class _Masthead extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          // Wrap, not Row: a masthead that overflows on a narrow window is
+          // the first thing anyone notices, and a Row cannot give way.
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 16,
+            runSpacing: 10,
             children: [
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [_accent, Color(0xFF9B7BFF)],
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [_accent, Color(0xFF9B7BFF)],
+                      ),
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: const Icon(
+                      Icons.grid_on_rounded,
+                      size: 17,
+                      color: Colors.white,
+                    ),
                   ),
-                  borderRadius: BorderRadius.circular(9),
-                ),
-                child: const Icon(
-                  Icons.grid_on_rounded,
-                  size: 17,
-                  color: Colors.white,
-                ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Lattice',
+                    style: text.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'service log console',
+                    style: text.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 10),
-              Text(
-                'Lattice',
-                style: text.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.2,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'service log console',
-                style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-              ),
-              const Spacer(),
-              _Stat(
-                label: 'rows',
-                value: _compact(controller.matchedCount),
-                accent: _accent,
-              ),
-              _Stat(
-                label: 'avg',
-                value: average == null ? '—' : '${(average as num).round()} ms',
-                accent: const Color(0xFF3DD68C),
-              ),
-              _Stat(
-                label: 'peak',
-                value: peak == null ? '—' : '$peak ms',
-                accent: const Color(0xFFFF7A7A),
-              ),
-              _Stat(
-                label: 'selected',
-                value: '${controller.selection.rowCount}',
-                accent: scheme.onSurfaceVariant,
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _Stat(
+                    label: 'rows',
+                    value: _compact(controller.matchedCount),
+                    accent: _accent,
+                  ),
+                  _Stat(
+                    label: 'avg',
+                    value: average == null
+                        ? '—'
+                        : '${(average as num).round()} ms',
+                    accent: const Color(0xFF3DD68C),
+                  ),
+                  _Stat(
+                    label: 'peak',
+                    value: peak == null ? '—' : '$peak ms',
+                    accent: const Color(0xFFFF7A7A),
+                  ),
+                  _Stat(
+                    label: 'selected',
+                    value: '${controller.selection.rowCount}',
+                    accent: scheme.onSurfaceVariant,
+                  ),
+                ],
               ),
             ],
           ),
           const SizedBox(height: 14),
-          Row(
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 10,
+            runSpacing: 10,
             children: [
               SizedBox(
-                width: 280,
+                width: 240,
                 height: 38,
                 child: TextField(
                   controller: search,
@@ -481,7 +503,6 @@ class _Masthead extends StatelessWidget {
                   onChanged: controller.setSearch,
                 ),
               ),
-              const SizedBox(width: 12),
               _Segmented<GridDensity>(
                 value: density,
                 onChanged: onDensity,
@@ -491,7 +512,6 @@ class _Masthead extends StatelessWidget {
                   GridDensity.comfortable: Icons.density_large_rounded,
                 },
               ),
-              const SizedBox(width: 12),
               _Toggle(
                 label: 'Group',
                 icon: Icons.workspaces_outline,
@@ -510,7 +530,6 @@ class _Masthead extends StatelessWidget {
                 on: live,
                 onChanged: onLive,
               ),
-              const Spacer(),
               TextButton.icon(
                 onPressed: () => controller.setFilter(
                   const FilterCondition(
@@ -612,41 +631,34 @@ class _Toggle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: GestureDetector(
-        onTap: () => onChanged(!on),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-          decoration: BoxDecoration(
-            color: on ? _accent.withValues(alpha: 0.18) : scheme.surface,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: on ? _accent : scheme.outlineVariant,
-              width: on ? 1.4 : 1,
-            ),
+    return GestureDetector(
+      onTap: () => onChanged(!on),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: on ? _accent.withValues(alpha: 0.18) : scheme.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: on ? _accent : scheme.outlineVariant,
+            width: on ? 1.4 : 1,
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon,
-                size: 15,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: on ? _accent : scheme.onSurfaceVariant),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: on ? FontWeight.w600 : FontWeight.w500,
                 color: on ? _accent : scheme.onSurfaceVariant,
               ),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: on ? FontWeight.w600 : FontWeight.w500,
-                  color: on ? _accent : scheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
